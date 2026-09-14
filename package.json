@@ -1,0 +1,23 @@
+{
+  "name": "next-stream",
+  "version": "0.1.0",
+  "description": "严格按规格驱动的虚拟主播生涯周回合经营游戏",
+  "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shirayuki-inari/next-stream.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "test": "node --test",
+    "check": "node --check src/app.js && node --check src/domain/engine.js && node --test",
+    "validate:replay": "node scripts/simulation.mjs indie conservative replay-e13",
+    "validate:balance": "node scripts/run-balance.mjs --seeds=100",
+    "validate:performance": "node scripts/measure-performance.mjs",
+    "validate:large-save": "node scripts/build-large-save.mjs"
+  }
+}

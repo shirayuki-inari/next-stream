@@ -1,0 +1,17 @@
+# Dependencies and local tooling
+node_modules/
+.playwright-cli/
+
+# Test and runtime output
+coverage/
+*.log
+
+# Reproducible large validation artifact (generate with npm run validate:large-save)
+output/validation/d9-large-save.json
+
+# Editor and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
