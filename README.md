@@ -37,4 +37,4 @@ npm run validate:large-save
 
 ## 自动部署
 
-推送到 `main` 后，GitHub Actions 会在 Node.js 20 上执行完整验收、构建仅包含 `index.html`、`src/` 和 `rules/` 的静态站点，并自动部署到 GitHub Pages。也可以在 Actions 页面手动运行 `Deploy GitHub Pages`。
+推送到 `main` 后，GitHub Actions 会在 Node.js 20 上执行完整验收；仅当 CI 成功时，后续工作流才会构建只包含 `index.html`、`src/` 和 `rules/` 的静态站点并部署到 GitHub Pages。也可以在 Actions 页面手动运行 `Deploy GitHub Pages`。
