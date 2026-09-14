@@ -4,6 +4,7 @@ node_modules/
 
 # Test and runtime output
 coverage/
+dist/
 *.log
 
 # Reproducible large validation artifact (generate with npm run validate:large-save)
