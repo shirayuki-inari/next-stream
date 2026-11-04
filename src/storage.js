@@ -2,6 +2,7 @@ import { ACTIONS } from "../rules/actions.js";
 import { RULESET_IDS } from "../rules/balance_standard_0_1.js";
 import { EVENT_TEMPLATE_BY_ID } from "../rules/event_templates.js";
 import { RULESET_MANIFEST } from "../rules/ruleset_manifest.js";
+import { CAREER_MODES } from "../rules/career_modes.js";
 
 const STORAGE_KEY = "next-stream.save.v1";
 const BACKUP_KEY = "next-stream.backups.v1";
@@ -53,7 +54,10 @@ function requireMoneyMap(value, label) {
 
 function assertReferencesAndRules(game) {
   if (!game.rulesets || Object.entries(RULESET_IDS).some(([key, id]) => game.rulesets[key] !== id)) throw new Error("UNSUPPORTED_RULESET：存档绑定的冻结规则包不可用");
+  if (game.rulesets.careerModes != null && game.rulesets.careerModes !== CAREER_MODES.id) throw new Error("UNSUPPORTED_RULESET：存档绑定的生涯模式规则包不可用");
+  if (game.careerMode != null && !Object.hasOwn(CAREER_MODES.modes, game.careerMode)) throw new Error("存档包含未知的生涯模式");
   if (!Array.isArray(game.plan) || game.plan.length !== 14 || game.plan.some((slot, index) => slot.index !== index || (slot.actionId && !ACTIONS[slot.actionId]))) throw new Error("存档排期包含非法格号或活动 ID");
+  if (game.previousPlan != null && (!Array.isArray(game.previousPlan) || game.previousPlan.length !== 14 || game.previousPlan.some((slot, index) => slot.index !== index || (slot.actionId && !ACTIONS[slot.actionId])))) throw new Error("存档的上周排期包含非法格号或活动 ID");
   if (!Array.isArray(game.audienceSegments) || game.audienceSegments.length !== 24) throw new Error("观众分群数据不完整");
   if (!Array.isArray(game.npcs) || game.npcs.length !== 20) throw new Error("主要 NPC 数据不完整");
   const contents = game.history?.contents || [];
@@ -123,6 +127,8 @@ export async function validateSavePackage(parsed) {
   if (parsed.manifest.packageVersion === 2) {
     for (const key of Object.keys(RULESET_MANIFEST)) {
       const declared = parsed.manifest.rulesets?.[key];
+      // 生涯模式规则包晚于首批导出加入；旧导出未声明它时只能作为标准生涯载入。
+      if (key === "careerModes" && declared == null && (parsed.game.careerMode ?? CAREER_MODES.defaultModeId) === CAREER_MODES.defaultModeId) continue;
       const expected = RULESET_MANIFEST[key];
       if (declared?.id !== expected.id || declared?.sha256 !== expected.sha256) throw new Error(`UNSUPPORTED_RULESET：${key} 规则哈希不匹配`);
     }

@@ -1,4 +1,4 @@
-import { acknowledgeReport, migrateGame, previewWeek, removePlanAction, updatePlan } from "../domain/engine.js";
+import { acknowledgeReport, migrateGame, previewWeek, removePlanAction, repeatPreviousPlan, updatePlan } from "../domain/engine.js";
 import { applyForAds, applyForFanFunding, payRefundPayable, setMembershipPolicy } from "../domain/finance.js";
 import { commitWeekRun, continueWeekRun, startWeekRun } from "../domain/week_run.js";
 import { acceptSponsorship } from "../domain/sponsorship.js";
@@ -84,6 +84,9 @@ export async function executeCommand(sourceState, envelope) {
   switch (envelope.type) {
     case "UPDATE_PLAN":
       domainResult = updatePlan(state, envelope.payload.slotIndex, envelope.payload.actionId, { confirmFlexibleLife: envelope.payload.confirmFlexibleLife === true, targetId: envelope.payload.targetId || null, targetType: envelope.payload.targetType || null });
+      break;
+    case "REPEAT_PREVIOUS_PLAN":
+      domainResult = repeatPreviousPlan(state);
       break;
     case "REMOVE_PLAN_ACTION":
       domainResult = removePlanAction(state, envelope.payload.slotIndex);
@@ -296,6 +299,7 @@ export async function executeCommand(sourceState, envelope) {
     phase: next.phase,
     emittedEventIds: domainResult.report ? [`weekly_report_${domainResult.report.weekIndex}`] : [],
   };
+  if (domainResult.summary) response.summary = domainResult.summary;
   next.commandRecords.push({ commandId: envelope.command_id, payloadHash: hash, result: response, committedSnapshotVersion: next.snapshotVersion });
   return { ...response, state: next, report: domainResult.report, replayed: false };
 }

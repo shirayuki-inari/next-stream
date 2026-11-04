@@ -25,7 +25,8 @@ import { applyAuditionPreparation, applyAuditionTest, processAuditionDeadlines }
 import { applyTransferPreparation } from "./transfers.js";
 import { collaborationExposureCoefficient, completeCollaboration, createNpcRoster, ensureWorldWeek, generateWorldWeek } from "./world.js";
 import { ensureWeeklyEvent, resolvePendingEventsWithSafeDefaults } from "./events.js";
-import { createTutorialState, generateCareerRetrospective, markTutorialProgressInPlace } from "./career.js";
+import { createTutorialState, generateCareerRetrospective, isCareerReviewWeek, markTutorialProgressInPlace, resolveCareerModeId } from "./career.js";
+import { CAREER_MODES } from "../../rules/career_modes.js";
 import { availablePropagationBoost, consumePropagationBoost, processPropagationCommissions } from "./distribution.js";
 import { createPreferences } from "./preferences.js";
 
@@ -116,7 +117,8 @@ export function createGame(input) {
   const state = {
     id: stableId("game", seed),
     schemaVersion: 1,
-    rulesets: { ...RULESET_IDS },
+    rulesets: { ...RULESET_IDS, careerModes: CAREER_MODES.id },
+    careerMode: resolveCareerModeId(input.careerModeId),
     seed,
     snapshotVersion: 1,
     weekIndex: 1,
@@ -285,6 +287,8 @@ export function migrateGame(sourceState) {
   state.tutorial ??= createTutorialState();
   state.careerRetrospectives ??= [];
   state.careerEnding ??= null;
+  state.careerMode ??= CAREER_MODES.defaultModeId;
+  state.rulesets.careerModes ??= CAREER_MODES.id;
   state.propagationCommissions ??= [];
   state.propagationEvents ??= [];
   state.preferences ??= createPreferences();
@@ -379,6 +383,40 @@ export function updatePlan(state, slotIndex, actionId, { confirmFlexibleLife = f
   if (!["LIFE", "REST"].includes(actionId)) markTutorialProgressInPlace(next, "SCHEDULE", weekDateRange(next.weekIndex).start);
   next.snapshotVersion += 1;
   return { ok: true, state: next };
+}
+
+/**
+ * 以上周已执行的排期为模板重建本周计划。每格都重新经过 updatePlan 校验：
+ * 已失效的绑定目标（过期商单、完成的项目或面试、其他周的联动预约）会被跳过；
+ * 上周由玩家确认转换的弹性生活格保持为生活格，不会被静默改成工作。
+ */
+export function repeatPreviousPlan(state) {
+  if (state.phase !== "PLANNING") return { ok: false, code: "INVALID_PHASE", message: "仅能在计划阶段修改排期" };
+  const previous = state.previousPlan;
+  if (!Array.isArray(previous) || previous.length !== 14) return { ok: false, code: "REQUIREMENT_UNMET", message: "还没有可沿用的上周排期" };
+  let working = structuredClone(state);
+  working.plan = createDefaultPlan();
+  const skipped = [];
+  let copied = 0;
+  const seenPairs = new Set();
+  for (const slot of previous) {
+    if (!slot.actionId || slot.actionId === "LIFE" || slot.locked) continue;
+    if (slot.pairId) {
+      if (seenPairs.has(slot.pairId)) continue;
+      seenPairs.add(slot.pairId);
+    }
+    if (working.plan[slot.index].flexibleLife) {
+      skipped.push({ slotIndex: slot.index, actionId: slot.actionId, code: "LIFE_CONFIRM_REQUIRED" });
+      continue;
+    }
+    const result = updatePlan(working, slot.index, slot.actionId, { targetId: slot.targetId || null, targetType: slot.targetType || null });
+    if (result.ok) {
+      working = result.state;
+      copied += 1;
+    } else skipped.push({ slotIndex: slot.index, actionId: slot.actionId, code: result.code });
+  }
+  working.snapshotVersion = state.snapshotVersion + 1;
+  return { ok: true, state: working, summary: { copied, skipped } };
 }
 
 function validateAuditionPlanOrder(state) {
@@ -796,13 +834,14 @@ export async function settleWeek(sourceState) {
 export function acknowledgeReport(sourceState) {
   if (sourceState.phase !== "REPORT") return { ok: false, code: "INVALID_PHASE", message: "当前没有待确认的周报" };
   const state = structuredClone(sourceState);
-  if (state.weekIndex === 104) {
-    state.careerRetrospectives ??= [];
+  state.careerRetrospectives ??= [];
+  if (isCareerReviewWeek(state, state.weekIndex) && !state.careerRetrospectives.some((item) => item.throughWeek === state.weekIndex)) {
     generateCareerRetrospective(state);
     state.phase = "RETROSPECTIVE";
     state.snapshotVersion += 1;
     return { ok: true, state };
   }
+  state.previousPlan = structuredClone(state.plan);
   state.weekIndex += 1;
   state.phase = "PLANNING";
   state.plan = createDefaultPlan();

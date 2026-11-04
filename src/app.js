@@ -18,7 +18,8 @@ import { adsEligibility, fanFundingEligibility } from "./domain/finance.js";
 import { sponsorCandidateMetrics } from "./domain/sponsorship.js";
 import { auditionEligibility, auditionScore, isAuditionTerminal } from "./domain/audition.js";
 import { invitationScore } from "./domain/world.js";
-import { TUTORIAL_STEPS, evaluateCareerGoal } from "./domain/career.js";
+import { TUTORIAL_STEPS, careerModeOf, evaluateCareerGoal, isCareerReviewWeek, nextCareerReviewWeek, retrospectivePeriodLabel } from "./domain/career.js";
+import { CAREER_MODES } from "../rules/career_modes.js";
 import { commandEnvelope, executeCommand } from "./application/commands.js";
 import { clearGame, exportGame, importGame, loadBackups, loadMigratedGame, loadSaveMetadata, saveGame } from "./storage.js";
 
@@ -141,63 +142,75 @@ function tutorialPanel() {
   return `<aside class="tutorial-strip"><div><span>前四周可跳过引导 · ${tutorial.completedSteps.length}/6</span><b>下一步：${labels[nextStep]}</b><small>全部完成一次性获得 ${money(tutorial.rewardJpy)} 教程效果；新身份不会重置。</small></div><div><button class="secondary-action" data-skip-tutorial>跳过</button><button class="primary-action" ${viewOnly ? `data-tutorial-step="${nextStep}"` : `data-view="${targets[nextStep]}"`}>${viewOnly ? "查看并理解" : "前往完成"} →</button></div></aside>`;
 }
 
+function routeDetail(routeId) {
+  const route = ROUTES[routeId] || ROUTES.indie;
+  return `<b>${escapeHtml(route.label)}</b> · ${escapeHtml(route.statement)}<span class="route-tags">${route.strengths.map((item) => `<em>${escapeHtml(item)}</em>`).join("")}</span>`;
+}
+
+function matchingAbilityPreset(abilities) {
+  return Object.entries(abilityPresets).find(([, preset]) => SKILLS.every((skill) => preset[skill] === abilities[skill]))?.[0] || null;
+}
+
 function renderCreation() {
   const draft = ui.creationDraft;
   const abilities = draft?.abilities || abilityPresets[ui.abilityPreset];
+  const activePreset = matchingAbilityPreset(abilities);
+  const routeId = draft?.routeId || ui.createRoute;
+  const radio = (name, value, checked, title, note) => `<label><input type="radio" name="${name}" value="${value}" ${checked ? "checked" : ""} /><span><b>${title}</b><small>${note}</small></span></label>`;
   root.innerHTML = `<main class="creation-shell">
-    <section class="creation-intro" aria-labelledby="game-title">
-      <div class="brand-lockup brand-large"><span class="brand-signal" aria-hidden="true"></span><span>下一场直播</span></div>
-      <div class="intro-copy">
-        <p class="eyebrow">VTUBER CAREER SIMULATION / WEEK 001</p>
-        <h1 id="game-title">把下一周，<br />排成你的生涯。</h1>
-        <p>经营的不是一个数字。内容表现、被看见的机会、观众留存与收入各自结算；你要照顾的，也包括镜头之外的自己。</p>
-      </div>
-      <ol class="loop-strip" aria-label="游戏循环">
-        <li><b>读取</b><span>动态与待办</span></li><li><b>安排</b><span>14 个活动格</span></li><li><b>执行</b><span>内容与经营</span></li><li><b>复盘</b><span>观众、财务、状态</span></li>
-      </ol>
-      <p class="simulation-note">所有金额均为游戏内模拟日元；规则采用冻结快照，不连接真实账号或支付。</p>
-    </section>
-
-    <section class="creation-panel">
+    <header class="start-header">
+      <div class="brand-lockup"><span class="brand-signal" aria-hidden="true"></span><span>下一场直播</span></div>
+      <span class="start-header-note">虚拟主播周回合经营 · 模拟日元</span>
+    </header>
+    <section class="start-panel">
       ${ui.notice ? `<div class="toast ${ui.notice.tone}" role="status"><span>${escapeHtml(ui.notice.text)}</span><button data-dismiss-notice aria-label="关闭提示">×</button></div>` : ""}
-      <form id="create-form" autocomplete="off">
-        <div class="form-heading"><span class="step-mark">开播前</span><h2>建立你的第一份运行档</h2><p>创建后仍可在生涯中改变所属；三条路线是不同资源结构，不是难度等级。</p></div>
-        <fieldset>
-          <legend>开局方式</legend>
-          <div class="segmented two">
-            <label><input type="radio" name="mode" value="direct" ${draft?.mode !== "history" ? "checked" : ""} /><span><b>直接出道</b><small>立即进入首播准备</small></span></label>
-            <label><input type="radio" name="mode" value="history" ${draft?.mode === "history" ? "checked" : ""} /><span><b>完整履历</b><small>从准备期积累作品</small></span></label>
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend>出道路线</legend>
-          <div class="route-options">
-            ${Object.values(ROUTES).map((route) => `<label class="route-option ${ui.createRoute === route.id ? "selected" : ""}">
-              <input type="radio" name="route" value="${route.id}" ${ui.createRoute === route.id ? "checked" : ""} />
-              <span class="route-top"><b>${route.label}</b><i>${route.id === "indie" ? "自主经营" : "虚构标准合同"}</i></span>
-              <small>${route.statement}</small>
-              <span class="route-tags">${route.strengths.map((item) => `<em>${item}</em>`).join("")}</span>
-            </label>`).join("")}
-          </div>
-        </fieldset>
+      <form id="create-form" class="start-form" autocomplete="off" aria-labelledby="game-title">
+        <div class="form-heading">
+          <p class="eyebrow">开播前 / 建立运行档</p>
+          <h1 id="game-title">把下一周，排成你的生涯。</h1>
+          <p>读取 → 安排 → 执行 → 复盘。三条路线是不同资源结构，不是难度等级；创建后仍可改变所属。</p>
+        </div>
         <div class="form-grid">
           <label class="field"><span>表演者代号</span><input name="performerCode" required maxlength="24" placeholder="例：HIKARI" value="${escapeHtml(draft?.performerCode || "")}" /></label>
           <label class="field"><span>角色名</span><input name="characterName" required maxlength="24" placeholder="例：朝雾光" value="${escapeHtml(draft?.characterName || "")}" /></label>
+        </div>
+        <fieldset>
+          <legend>出道路线</legend>
+          <div class="route-options">
+            ${Object.values(ROUTES).map((route) => `<label class="route-option ${routeId === route.id ? "selected" : ""}"><input type="radio" name="route" value="${route.id}" ${routeId === route.id ? "checked" : ""} /><b>${route.label}</b><i>${route.id === "indie" ? "自主经营" : "虚构标准合同"}</i></label>`).join("")}
+          </div>
+          <p class="route-detail" id="route-detail" aria-live="polite">${routeDetail(routeId)}</p>
+        </fieldset>
+        <div class="option-pair">
+          <fieldset>
+            <legend>生涯长度</legend>
+            <div class="segmented two">${Object.values(CAREER_MODES.modes).map((mode) => radio("careerModeId", mode.id, (draft?.careerModeId || CAREER_MODES.defaultModeId) === mode.id, mode.label, mode.id === "short" ? "26 周 · 约 20 分钟" : "104 周 · 完整两年")).join("")}</div>
+          </fieldset>
+          <fieldset>
+            <legend>开局方式</legend>
+            <div class="segmented two">${radio("mode", "direct", draft?.mode !== "history", "直接出道", "立即首播准备")}${radio("mode", "history", draft?.mode === "history", "完整履历", "从准备期积累")}</div>
+          </fieldset>
+        </div>
+        <div class="form-grid triple">
           <label class="field"><span>主语言</span><select name="primaryLanguage"><option value="jp" ${draft?.primaryLanguage !== "en" ? "selected" : ""}>日语市场</option><option value="en" ${draft?.primaryLanguage === "en" ? "selected" : ""}>英语市场</option></select></label>
           <label class="field"><span>内容主方向</span><select name="primaryDirection">${Object.entries(DIRECTIONS).map(([id, label]) => `<option value="${id}" ${draft?.primaryDirection === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>
           <label class="field"><span>职业目标</span><select name="careerGoal">${Object.entries(GOALS).map(([id, label]) => `<option value="${id}" ${draft?.careerGoal === id ? "selected" : ""}>${label}</option>`).join("")}</select></label>
-          <label class="field"><span>存档种子</span><input name="seed" maxlength="64" value="${escapeHtml(draft?.seed || "next-stream-001")}" /></label>
         </div>
         <fieldset class="ability-fieldset">
           <legend>能力配置 <span id="ability-total" class="legend-total">总计 300 / 300</span></legend>
           <div class="preset-row" role="group" aria-label="能力预设">
-            ${Object.entries({ balanced: "均衡", talk: "临场表达", stage: "舞台表演", maker: "企划制作" }).map(([id, label]) => `<button type="button" class="preset-button ${ui.abilityPreset === id ? "active" : ""}" data-preset="${id}">${label}</button>`).join("")}
+            ${Object.entries({ balanced: "均衡", talk: "临场表达", stage: "舞台表演", maker: "企划制作" }).map(([id, label]) => `<button type="button" class="preset-button ${activePreset === id ? "active" : ""}" data-preset="${id}" aria-pressed="${activePreset === id}">${label}</button>`).join("")}
           </div>
-          <div class="ability-grid">
-            ${SKILLS.map((skill) => `<label class="ability-control"><span>${SKILL_LABELS[skill]}</span><input type="number" name="ability-${skill}" min="20" max="70" value="${abilities[skill]}" /><i class="ability-bar"><b style="width:${abilities[skill]}%"></b></i></label>`).join("")}
-          </div>
+          <details class="ability-fold" ${activePreset ? "" : "open"}>
+            <summary>自定义六项数值与存档种子</summary>
+            <div class="ability-grid">
+              ${SKILLS.map((skill) => `<label class="ability-control"><span>${SKILL_LABELS[skill]}</span><input type="number" name="ability-${skill}" min="20" max="70" value="${abilities[skill]}" /><i class="ability-bar"><b style="width:${abilities[skill]}%"></b></i></label>`).join("")}
+            </div>
+            <label class="field seed-field"><span>存档种子</span><input name="seed" maxlength="64" value="${escapeHtml(draft?.seed || "next-stream-001")}" /></label>
+          </details>
         </fieldset>
         <button class="primary-action creation-submit" type="submit"><span>建立运行档</span><i>进入第 1 周 →</i></button>
+        <p class="simulation-note">所有金额均为游戏内模拟日元；规则采用冻结快照，不连接真实账号或支付。</p>
       </form>
     </section>
   </main>${ui.confirmation ? confirmationDialog() : ""}`;
@@ -217,10 +230,14 @@ function bindCreation() {
   root.querySelectorAll('input[name="route"]').forEach((input) => input.addEventListener("change", () => {
     ui.createRoute = input.value;
     root.querySelectorAll(".route-option").forEach((label) => label.classList.toggle("selected", label.contains(input)));
+    root.querySelector("#route-detail").innerHTML = routeDetail(input.value);
   }));
+  // 预设只改写六项数值，不重绘表单，避免清空已填写的代号与角色名。
   root.querySelectorAll("[data-preset]").forEach((button) => button.addEventListener("click", () => {
     ui.abilityPreset = button.dataset.preset;
-    renderCreation();
+    const preset = abilityPresets[ui.abilityPreset];
+    for (const skill of SKILLS) root.querySelector(`input[name="ability-${skill}"]`).value = preset[skill];
+    updateAbilityDisplay();
   }));
   root.querySelectorAll('.ability-control input[type="number"]').forEach((input) => input.addEventListener("input", updateAbilityDisplay));
   root.querySelector("#create-form").addEventListener("submit", async (event) => {
@@ -228,7 +245,7 @@ function bindCreation() {
     const data = new FormData(event.currentTarget);
     const abilities = Object.fromEntries(SKILLS.map((skill) => [skill, Number(data.get(`ability-${skill}`))]));
     try {
-      ui.creationDraft = { mode: data.get("mode"), routeId: data.get("route"), performerCode: data.get("performerCode"), characterName: data.get("characterName"), primaryLanguage: data.get("primaryLanguage"), primaryDirection: data.get("primaryDirection"), careerGoal: data.get("careerGoal"), seed: data.get("seed"), abilities };
+      ui.creationDraft = { mode: data.get("mode"), routeId: data.get("route"), performerCode: data.get("performerCode"), characterName: data.get("characterName"), primaryLanguage: data.get("primaryLanguage"), primaryDirection: data.get("primaryDirection"), careerGoal: data.get("careerGoal"), careerModeId: data.get("careerModeId"), seed: data.get("seed"), abilities };
       const candidate = createGame(ui.creationDraft);
       if (candidate.contract) {
         const accepted = await requestConfirmation({
@@ -261,6 +278,9 @@ function updateAbilityDisplay() {
   display.textContent = `总计 ${total} / 300`;
   display.classList.toggle("invalid", total !== 300 || inputs.some((input) => input.value < 20 || input.value > 70));
   inputs.forEach((input) => { input.closest(".ability-control").querySelector(".ability-bar b").style.width = `${Math.min(100, Math.max(0, input.value))}%`; });
+  const current = Object.fromEntries(inputs.map((input) => [input.name.replace("ability-", ""), Number(input.value)]));
+  const preset = matchingAbilityPreset(current);
+  root.querySelectorAll("[data-preset]").forEach((button) => { button.classList.toggle("active", button.dataset.preset === preset); button.setAttribute("aria-pressed", String(button.dataset.preset === preset)); });
 }
 
 function showInlineError(form, message) {
@@ -277,7 +297,7 @@ function shell(content) {
   return `<div class="game-shell">
     <header class="topbar">
       <button class="brand-lockup brand-button" data-view="overview" aria-label="返回周总览"><span class="brand-signal" aria-hidden="true"></span><span>下一场直播</span></button>
-      <div class="week-clock"><span>WEEK ${String(game.weekIndex).padStart(3, "0")}</span><b>${dateLabel(range.start)} — ${dateLabel(range.end)}</b><i>${game.phase === "PLANNING" ? "排期中" : game.phase === "READY_TO_COMMIT" ? "待提交" : game.phase === "REPORT" ? "周报待确认" : game.phase === "RETROSPECTIVE" ? "两年回顾" : game.phase === "CAREER_ENDED" ? "生涯已归档" : "运行中"}</i></div>
+      <div class="week-clock"><span>WEEK ${String(game.weekIndex).padStart(3, "0")}${nextCareerReviewWeek(game) ? ` / ${String(nextCareerReviewWeek(game)).padStart(3, "0")}` : ""}</span><b>${dateLabel(range.start)} — ${dateLabel(range.end)}</b><i>${game.phase === "PLANNING" ? "排期中" : game.phase === "READY_TO_COMMIT" ? "待提交" : game.phase === "REPORT" ? "周报待确认" : game.phase === "RETROSPECTIVE" ? `${retrospectivePeriodLabel(game.weekIndex)}回顾` : game.phase === "CAREER_ENDED" ? "生涯已归档" : "运行中"}</i></div>
       <div class="identity-chip"><span>${escapeHtml(game.character.name).slice(0, 1)}</span><div><b>${escapeHtml(game.character.name)}</b><small>${affiliationLabel()}</small></div></div>
     </header>
     <nav class="primary-nav" aria-label="主要页面">
@@ -291,8 +311,14 @@ function shell(content) {
   </div>`;
 }
 
+function careerProgressLabel() {
+  const mode = careerModeOf(game);
+  const reviewWeek = nextCareerReviewWeek(game);
+  return reviewWeek ? `${mode.label} · 第 ${game.weekIndex} / ${reviewWeek} 周回顾` : `${mode.label} · 第 ${game.weekIndex} 周 · 继续经营`;
+}
+
 function overviewView() {
-  if (game.phase === "CAREER_ENDED") return `<section class="page-stack"><div class="page-heading overview-heading"><div><p class="eyebrow">CAREER ARCHIVED / WEEK 104</p><h1>这段生涯已经由你主动收束。</h1><p>结果不是失败判定。全部作品、财务、合同、角色、频道与选择历史仍可查看和导出。</p></div><div class="heading-actions"><button class="primary-action" data-view="life">查看生涯回顾 →</button></div></div><section class="ended-summary"><article><span>职业结果</span><b>${CAREER_ENDING_LABELS[game.careerEnding?.outcomeId] || "主动结束"}</b><small>${game.careerEnding?.endedAt || weekDateRange(104).end}</small></article><article><span>最终订阅</span><b>${game.channel.subscribers.toLocaleString()}</b><small>不作为统一成败线</small></article><article><span>保留记录</span><b>${game.history.contents.length} 条内容</b><small>${game.history.journalEntries.length} 笔不可变分录</small></article></section></section>`;
+  if (game.phase === "CAREER_ENDED") return `<section class="page-stack"><div class="page-heading overview-heading"><div><p class="eyebrow">CAREER ARCHIVED / WEEK ${String(game.careerEnding?.throughWeek || 104).padStart(3, "0")}</p><h1>这段生涯已经由你主动收束。</h1><p>结果不是失败判定。全部作品、财务、合同、角色、频道与选择历史仍可查看和导出。</p></div><div class="heading-actions"><button class="primary-action" data-view="life">查看生涯回顾 →</button></div></div><section class="ended-summary"><article><span>职业结果</span><b>${CAREER_ENDING_LABELS[game.careerEnding?.outcomeId] || "主动结束"}</b><small>${game.careerEnding?.endedAt || weekDateRange(game.careerEnding?.throughWeek || 104).end}</small></article><article><span>最终订阅</span><b>${game.channel.subscribers.toLocaleString()}</b><small>不作为统一成败线</small></article><article><span>保留记录</span><b>${game.history.contents.length} 条内容</b><small>${game.history.journalEntries.length} 笔不可变分录</small></article></section></section>`;
   const preview = previewWeek(game);
   const range = weekDateRange(game.weekIndex);
   const avg = game.metrics.weeklyAverageConcurrent == null ? "—" : compact(game.metrics.weeklyAverageConcurrent);
@@ -300,7 +326,7 @@ function overviewView() {
   const membershipTodo = game.history.membershipPromises.find((promise) => promise.status === "OVERDUE") || game.history.membershipPromises.find((promise) => promise.status === "DUE");
   return `<section class="page-stack">
     <div class="page-heading overview-heading">
-      <div><p class="eyebrow">${dateLabel(range.start)} — ${dateLabel(range.end)} / ${affiliationLabel()}</p><h1>${game.phase === "REPORT" ? "本周已收束，先读结果。" : game.phase === "READY_TO_COMMIT" ? "本周结果已暂存，等待正式提交。" : "这一周，镜头要对准哪里？"}</h1><p>${game.phase === "REPORT" ? "数值已按活动发生顺序结算。确认周报后再进入下一轮排期。" : game.phase === "READY_TO_COMMIT" ? "正式存档尚未改变；现在可以安全地完成原子提交。" : "先守住生活格，再决定内容、成长与现金之间的取舍。"}</p></div>
+      <div><p class="eyebrow">${dateLabel(range.start)} — ${dateLabel(range.end)} / ${affiliationLabel()} / ${careerProgressLabel()}</p><h1>${game.phase === "REPORT" ? "本周已收束，先读结果。" : game.phase === "READY_TO_COMMIT" ? "本周结果已暂存，等待正式提交。" : "这一周，镜头要对准哪里？"}</h1><p>${game.phase === "REPORT" ? "数值已按活动发生顺序结算。确认周报后再进入下一轮排期。" : game.phase === "READY_TO_COMMIT" ? "正式存档尚未改变；现在可以安全地完成原子提交。" : "先守住生活格，再决定内容、成长与现金之间的取舍。"}</p></div>
       <div class="heading-actions">${game.phase === "REPORT" ? `<button class="primary-action" data-open-report>查看周报</button>` : game.phase === "READY_TO_COMMIT" ? `<button class="primary-action" data-commit-week>提交周结算 <span>→</span></button>` : `<button class="primary-action" data-view="schedule">安排本周 <span>→</span></button>`}</div>
     </div>
     <div class="metric-grid">
@@ -333,10 +359,17 @@ function overviewView() {
   </section>`;
 }
 
+function pendingEventStrip() {
+  const event = game.phase === "PLANNING" ? game.textEvents.find((item) => item.status === "PENDING") : null;
+  if (!event) return "";
+  return `<aside class="tutorial-strip event-strip"><div><span>本周待决定事件 · 直接推进将采用安全默认</span><b>${escapeHtml(event.title)}</b></div><div><button class="secondary-action" data-view="overview">去总览处理 →</button></div></aside>`;
+}
+
 function scheduleView() {
   const preview = previewWeek(game);
   return `<section class="page-stack">
-    <div class="page-heading compact-heading"><div><p class="eyebrow">WEEKLY RUNDOWN / 14 SLOTS</p><h1>本周排期</h1><p>选择时间格，再选择活动。移动端与键盘均无需拖拽。</p></div><div class="heading-actions"><button class="secondary-action" data-auto-plan ${game.phase !== "PLANNING" ? "disabled" : ""}>填入稳健示例</button><button class="primary-action" data-settle ${ui.busy || !["PLANNING", "READY_TO_COMMIT"].includes(game.phase) ? "disabled" : ""}>${ui.busy ? "正在结算…" : game.phase === "READY_TO_COMMIT" ? "提交周结算 →" : game.phase === "REPORT" ? "已结算" : "推进本周 →"}</button></div></div>
+    <div class="page-heading compact-heading"><div><p class="eyebrow">WEEKLY RUNDOWN / 14 SLOTS</p><h1>本周排期</h1><p>选择时间格，再选择活动。移动端与键盘均无需拖拽。</p></div><div class="heading-actions"><button class="secondary-action" data-repeat-plan ${game.phase !== "PLANNING" || !game.previousPlan ? "disabled" : ""} ${game.previousPlan ? "" : `title="完成第一周后可用"`}>沿用上周排期</button><button class="secondary-action" data-auto-plan ${game.phase !== "PLANNING" ? "disabled" : ""}>填入稳健示例</button><button class="primary-action" data-settle ${ui.busy || !["PLANNING", "READY_TO_COMMIT"].includes(game.phase) ? "disabled" : ""}>${ui.busy ? "正在结算…" : game.phase === "READY_TO_COMMIT" ? "提交周结算 →" : game.phase === "REPORT" ? "已结算" : "推进本周 →"}</button></div></div>
+    ${pendingEventStrip()}
     <div class="schedule-summary" data-risk="${preview.risk}">
       <div><span>工作格</span><b>${preview.workSlots}<small> / 12</small></b></div><div><span>直播</span><b>${preview.liveCount}<small> 场</small></b></div><div><span>预计疲劳</span><b>${preview.projectedFatigue}<small> / 100</small></b></div><div><span>预计压力</span><b>${preview.projectedStress}<small> / 100</small></b></div>
       <p>${preview.risk === "low" ? "当前计划保留了恢复空间。" : preview.risk === "medium" ? "当前负荷偏高，建议检查休息格。" : "当前负荷可能不可持续，建议减量。"}</p>
@@ -797,14 +830,14 @@ function reportSummary(report, includeDetails = true) {
 function reportDialog() {
   const report = game.history.weeklyReports.at(-1);
   if (!report) return "";
-  return `<div class="dialog-backdrop report-backdrop"><section class="report-dialog" role="dialog" aria-modal="true" aria-labelledby="report-title"><header><span>WEEK ${String(report.weekIndex).padStart(3, "0")} / REPORT</span><button data-close-report aria-label="暂时关闭周报">×</button></header><div class="report-hero"><p>${dateLabel(report.dateStart)} — ${dateLabel(report.dateEnd)}</p><h2 id="report-title">这一周，信号留下了什么？</h2><span>结果已写入正式历史；文字只解释规则引擎已经完成的结算。</span></div>${reportSummary(report, true)}<div class="report-state"><h3>周末状态</h3>${statusMeter("疲劳", report.state.fatigue, true)}${statusMeter("压力", report.state.stress, true)}${statusMeter("创作动力", report.state.motivation)}${statusMeter("身体状态", report.state.physicalCondition)}</div><footer><button class="secondary-action" data-close-report>留在本周查看</button><button class="primary-action" data-next-week>${report.weekIndex === 104 ? "确认周报，查看两年回顾" : `确认周报，进入第 ${report.weekIndex + 1} 周`} →</button></footer></section></div>`;
+  return `<div class="dialog-backdrop report-backdrop"><section class="report-dialog" role="dialog" aria-modal="true" aria-labelledby="report-title"><header><span>WEEK ${String(report.weekIndex).padStart(3, "0")} / REPORT</span><button data-close-report aria-label="暂时关闭周报">×</button></header><div class="report-hero"><p>${dateLabel(report.dateStart)} — ${dateLabel(report.dateEnd)}</p><h2 id="report-title">这一周，信号留下了什么？</h2><span>结果已写入正式历史；文字只解释规则引擎已经完成的结算。</span></div>${reportSummary(report, true)}<div class="report-state"><h3>周末状态</h3>${statusMeter("疲劳", report.state.fatigue, true)}${statusMeter("压力", report.state.stress, true)}${statusMeter("创作动力", report.state.motivation)}${statusMeter("身体状态", report.state.physicalCondition)}</div><footer><button class="secondary-action" data-close-report>留在本周查看</button><button class="primary-action" data-next-week>${isCareerReviewWeek(game, report.weekIndex) && !game.careerRetrospectives.some((item) => item.throughWeek === report.weekIndex) ? `确认周报，查看${retrospectivePeriodLabel(report.weekIndex)}回顾` : `确认周报，进入第 ${report.weekIndex + 1} 周`} →</button></footer></section></div>`;
 }
 
 function retrospectiveDialog() {
   const review = game.careerRetrospectives.at(-1);
   if (!review || game.phase !== "RETROSPECTIVE") return "";
   const income = Object.values(review.incomeStructure).reduce((sum, value) => sum + BigInt(value), 0n);
-  return `<div class="dialog-backdrop report-backdrop"><section class="report-dialog retrospective-dialog" role="dialog" aria-modal="true" aria-labelledby="retrospective-title"><header><span>104 WEEKS / CAREER RETROSPECTIVE</span></header><div class="report-hero"><p>${dateLabel(game.createdAt)} — ${dateLabel(weekDateRange(104).end)}</p><h2 id="retrospective-title">两年的信号，已经成为履历。</h2><span>回顾不是统一结局。你可以继续经营，也可以把暂停、兼职、独立或留社视为正常选择。</span></div><div class="retrospective-grid"><article><span>公开作品</span><b>${review.works.published}</b><small>代表作 ${review.works.portfolio} · 完结项目 ${review.works.projects}</small></article><article><span>完成合作</span><b>${review.collaborations.completed}</b><small>${review.collaborations.partners} 位不同合作对象</small></article><article><span>所属变化</span><b>${review.transfers.completed}</b><small>${review.transfers.affiliationHistory} 段历史所属</small></article><article><span>累计归属收入</span><b>${compact(income)}</b><small>跨平台、商单、商品与项目记录</small></article><article><span>平均负荷</span><b>${review.healthLoad.averageFatigue} / ${review.healthLoad.averageStress}</b><small>疲劳 / 压力 · 身体 ${review.healthLoad.currentPhysicalCondition}</small></article><article><span>${GOALS[review.goalEvaluation.goalId]}</span><b>${review.goalEvaluation.achieved ? "已达成" : "继续积累"}</b><small>目标专属评价</small></article></div><details class="micro-fold"><summary>查看收入结构与关键选择</summary><div class="retrospective-details"><p>${Object.entries(review.incomeStructure).map(([key, value]) => `${key}：${money(value)}`).join(" · ")}</p><p>${review.keyChoices.length ? review.keyChoices.map((item) => `${item.title}［${item.choices.join(" → ")}］`).join("；") : "没有需要特别列出的事件选择。"}</p></div></details><details class="micro-fold career-ending-fold"><summary>主动结束并归档本次生涯</summary><p>只有你的明确选择会进入终止状态。以下结果没有优劣排序，全部保留历史。</p><div>${Object.entries(CAREER_ENDING_LABELS).map(([id, label]) => `<button class="secondary-action" data-end-career="${id}">${label}</button>`).join("")}</div></details><p class="retrospective-policy">${escapeHtml(review.outcomePolicy)}</p><footer><button class="primary-action" data-continue-career>继续经营，进入第 105 周 →</button></footer></section></div>`;
+  return `<div class="dialog-backdrop report-backdrop"><section class="report-dialog retrospective-dialog" role="dialog" aria-modal="true" aria-labelledby="retrospective-title"><header><span>${review.throughWeek} WEEKS / CAREER RETROSPECTIVE</span></header><div class="report-hero"><p>${dateLabel(game.createdAt)} — ${dateLabel(weekDateRange(review.throughWeek).end)}</p><h2 id="retrospective-title">${retrospectivePeriodLabel(review.throughWeek)}的信号，已经成为履历。</h2><span>回顾不是统一结局。你可以继续经营，也可以把暂停、兼职、独立或留社视为正常选择。</span></div><div class="retrospective-grid"><article><span>公开作品</span><b>${review.works.published}</b><small>代表作 ${review.works.portfolio} · 完结项目 ${review.works.projects}</small></article><article><span>完成合作</span><b>${review.collaborations.completed}</b><small>${review.collaborations.partners} 位不同合作对象</small></article><article><span>所属变化</span><b>${review.transfers.completed}</b><small>${review.transfers.affiliationHistory} 段历史所属</small></article><article><span>累计归属收入</span><b>${compact(income)}</b><small>跨平台、商单、商品与项目记录</small></article><article><span>平均负荷</span><b>${review.healthLoad.averageFatigue} / ${review.healthLoad.averageStress}</b><small>疲劳 / 压力 · 身体 ${review.healthLoad.currentPhysicalCondition}</small></article><article><span>${GOALS[review.goalEvaluation.goalId]}</span><b>${review.goalEvaluation.achieved ? "已达成" : "继续积累"}</b><small>目标专属评价</small></article></div><details class="micro-fold"><summary>查看收入结构与关键选择</summary><div class="retrospective-details"><p>${Object.entries(review.incomeStructure).map(([key, value]) => `${key}：${money(value)}`).join(" · ")}</p><p>${review.keyChoices.length ? review.keyChoices.map((item) => `${item.title}［${item.choices.join(" → ")}］`).join("；") : "没有需要特别列出的事件选择。"}</p></div></details><details class="micro-fold career-ending-fold"><summary>主动结束并归档本次生涯</summary><p>只有你的明确选择会进入终止状态。以下结果没有优劣排序，全部保留历史。</p><div>${Object.entries(CAREER_ENDING_LABELS).map(([id, label]) => `<button class="secondary-action" data-end-career="${id}">${label}</button>`).join("")}</div></details><p class="retrospective-policy">${escapeHtml(review.outcomePolicy)}</p><footer><button class="primary-action" data-continue-career>继续经营，进入第 ${review.throughWeek + 1} 周 →</button></footer></section></div>`;
 }
 
 function confirmationDialog() {
@@ -961,15 +994,15 @@ function bindGame() {
   }));
   root.querySelector("[data-continue-career]")?.addEventListener("click", async () => {
     const result = await dispatchCommand("CONTINUE_AFTER_RETROSPECTIVE", {});
-    if (result.ok) { game = result.state; await saveGame(game); ui.view = "overview"; ui.notice = { tone: "success", text: "两年回顾已保留。第 105 周开始，经营可以继续。" }; }
+    if (result.ok) { game = result.state; await saveGame(game); ui.view = "overview"; ui.notice = { tone: "success", text: `${retrospectivePeriodLabel(game.weekIndex - 1)}回顾已保留。第 ${game.weekIndex} 周开始，经营可以继续。${nextCareerReviewWeek(game) ? `第 ${nextCareerReviewWeek(game)} 周会再生成一次回顾。` : ""}` }; }
     else ui.notice = { tone: "error", text: result.message };
     render();
   });
   root.querySelectorAll("[data-end-career]").forEach((button) => button.addEventListener("click", async () => {
     const outcomeId = button.dataset.endCareer;
-    const accepted = await requestConfirmation({ title: `${CAREER_ENDING_LABELS[outcomeId]}并归档`, actionLabel: "确认结束本次生涯", danger: true, currentPlan: `在第 104 周以“${CAREER_ENDING_LABELS[outcomeId]}”收束`, cost: "不会追加惩罚、债务或虚构费用；既有责任照常保留", lostPermissions: "不能再推进周次、修改排期或启动新经营项目", retainedAssets: "作品、订阅、角色、频道、合同、全部财务流水与回顾可继续查看和导出", unresolvedIssues: "未交付订单、应收、应付与合同责任只读保留，不会被终止操作抹除" });
+    const accepted = await requestConfirmation({ title: `${CAREER_ENDING_LABELS[outcomeId]}并归档`, actionLabel: "确认结束本次生涯", danger: true, currentPlan: `在第 ${game.weekIndex} 周以“${CAREER_ENDING_LABELS[outcomeId]}”收束`, cost: "不会追加惩罚、债务或虚构费用；既有责任照常保留", lostPermissions: "不能再推进周次、修改排期或启动新经营项目", retainedAssets: "作品、订阅、角色、频道、合同、全部财务流水与回顾可继续查看和导出", unresolvedIssues: "未交付订单、应收、应付与合同责任只读保留，不会被终止操作抹除" });
     if (!accepted) return;
-    const result = await dispatchCommand("END_CAREER", { outcomeId, date: weekDateRange(104).end });
+    const result = await dispatchCommand("END_CAREER", { outcomeId, date: weekDateRange(game.weekIndex).end });
     if (result.ok) { game = result.state; await saveGame(game); ui.view = "life"; ui.notice = { tone: "success", text: "本次生涯已按你的主动选择归档；全部历史仍可查看与导出。" }; }
     else ui.notice = { tone: "error", text: result.message };
     render();
@@ -992,6 +1025,7 @@ function bindGame() {
     render();
   }));
   root.querySelector("[data-auto-plan]")?.addEventListener("click", applySafePlan);
+  root.querySelector("[data-repeat-plan]")?.addEventListener("click", repeatPreviousPlan);
   root.querySelector("[data-settle]")?.addEventListener("click", runWeek);
   root.querySelector("[data-commit-week]")?.addEventListener("click", runWeek);
   root.querySelector("[data-apply-fan-funding]")?.addEventListener("click", async () => {
@@ -1219,7 +1253,7 @@ function bindGame() {
   }));
   root.querySelector("[data-open-report]")?.addEventListener("click", () => { ui.focusReturn = "[data-open-report]"; ui.reportOpen = true; render(); });
   root.querySelectorAll("[data-close-report]").forEach((button) => button.addEventListener("click", () => { ui.reportOpen = false; render(); }));
-  root.querySelector("[data-next-week]")?.addEventListener("click", async () => { const result = await dispatchCommand("ACKNOWLEDGE_REPORT", { weekIndex: game.weekIndex }); if (result.ok) { game = result.state; await saveGame(game); ui.reportOpen = false; ui.view = "overview"; ui.notice = game.phase === "RETROSPECTIVE" ? null : { tone: "success", text: `第 ${game.weekIndex} 周已开始。行业与现实时间不会在你离开时自行推进。` }; render(); } });
+  root.querySelector("[data-next-week]")?.addEventListener("click", async () => { const result = await dispatchCommand("ACKNOWLEDGE_REPORT", { weekIndex: game.weekIndex }); if (result.ok) { game = result.state; await saveGame(game); ui.reportOpen = false; ui.view = game.phase === "PLANNING" ? "schedule" : "overview"; ui.notice = game.phase === "RETROSPECTIVE" ? null : { tone: "success", text: `第 ${game.weekIndex} 周已开始，直接进入排期。行业与现实时间不会在你离开时自行推进。` }; render(); } });
   root.querySelector("[data-export]")?.addEventListener("click", async () => {
     try {
       await exportGame(game);
@@ -1236,6 +1270,18 @@ function bindGame() {
   });
   root.querySelectorAll("[data-toggle-detail]").forEach((button) => button.addEventListener("click", () => { const detail = root.querySelector(`#${button.dataset.toggleDetail}`); if (detail) { detail.open = true; detail.scrollIntoView({ behavior: "smooth", block: "center" }); } }));
   root.querySelectorAll("details").forEach((detail) => detail.addEventListener("toggle", () => { const marker = detail.querySelector("summary > i"); if (marker) marker.textContent = detail.open ? "收起" : "展开"; }));
+}
+
+async function repeatPreviousPlan() {
+  const result = await dispatchCommand("REPEAT_PREVIOUS_PLAN", {});
+  if (!result.ok) { ui.notice = { tone: "error", text: result.message }; render(); return; }
+  game = result.state;
+  await saveGame(game);
+  const skipped = result.summary?.skipped || [];
+  const lifeKept = skipped.filter((item) => item.code === "LIFE_CONFIRM_REQUIRED").length;
+  const invalid = skipped.length - lifeKept;
+  ui.notice = { tone: "success", text: `已沿用上周 ${result.summary?.copied || 0} 项活动。${invalid ? `${invalid} 项绑定已失效，已留空。` : ""}${lifeKept ? `${lifeKept} 个弹性生活格保持休息，如需工作请手动确认。` : ""}` };
+  render();
 }
 
 async function applySafePlan() {

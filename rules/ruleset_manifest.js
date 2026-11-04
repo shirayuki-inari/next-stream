@@ -11,4 +11,8 @@ export const RULESET_MANIFEST = Object.freeze({
     id: "content_core_1_0",
     sha256: "8b6206722219b6ba3daab0a01232c3c644cb2b532d74222cbc35ab1d2b2849c1",
   }),
+  careerModes: Object.freeze({
+    id: "career_modes_1_0",
+    sha256: "de6948d414bc6e8bcbd1f99877a2046988b7deb2a7d291cb1aa6daeb47bf606f",
+  }),
 });

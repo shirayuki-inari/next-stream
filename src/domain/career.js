@@ -2,12 +2,38 @@ import { ROUTES } from "../../rules/agency_profiles.js";
 import { BALANCE } from "../../rules/balance_standard_0_1.js";
 import { ensureWorldWeek } from "./world.js";
 import { ensureWeeklyEvent } from "./events.js";
+import { CAREER_MODES } from "../../rules/career_modes.js";
 
 export const TUTORIAL_STEPS = Object.freeze(["SCHEDULE", "FIRST_LIVE", "FIRST_VIDEO", "AUDIENCE_METRICS", "FINANCE_LAYERS", "CONTRACT_ASSETS"]);
 export const CAREER_ENDING_TYPES = Object.freeze(["PAUSE", "PART_TIME", "GRADUATION", "INDEPENDENT", "STAY_COMPANY"]);
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+export function resolveCareerModeId(modeId) {
+  return Object.hasOwn(CAREER_MODES.modes, modeId || "") ? modeId : CAREER_MODES.defaultModeId;
+}
+
+export function careerModeOf(state) {
+  return CAREER_MODES.modes[resolveCareerModeId(state?.careerMode)];
+}
+
+export function isCareerReviewWeek(state, weekIndex) {
+  return careerModeOf(state).reviewWeeks.includes(weekIndex);
+}
+
+/** 下一个尚未生成回顾的检查周；全部回顾已生成时返回 null。 */
+export function nextCareerReviewWeek(state) {
+  return careerModeOf(state).reviewWeeks.find((week) => week >= state.weekIndex && !(state.careerRetrospectives || []).some((item) => item.throughWeek === week)) ?? null;
+}
+
+export function retrospectivePeriodLabel(throughWeek) {
+  return throughWeek >= 104 ? "两年" : throughWeek === 26 ? "半年" : `${throughWeek} 周`;
+}
+
+function atPendingRetrospective(state) {
+  return state.phase === "RETROSPECTIVE" && isCareerReviewWeek(state, state.weekIndex);
 }
 
 export function createTutorialState() {
@@ -84,6 +110,7 @@ function incomeSourceCount(state) {
 }
 
 export function evaluateCareerGoal(state) {
+  const thresholds = careerModeOf(state).goalThresholds;
   const reports = state.history.weeklyReports.slice(-8);
   const averageStress = reports.length ? Math.round(reports.reduce((sum, report) => sum + report.state.stress, 0) / reports.length) : state.performer.stress;
   const incomeTotal = attributableIncomeLastEightWeeks(state);
@@ -98,27 +125,32 @@ export function evaluateCareerGoal(state) {
   const sourceCount = incomeSourceCount(state);
   const directionCounts = new Set(contents.map((content) => content.actionId)).size;
   const common = { sampleWeeks: reports.length, averageStress, incomeTotalJpy: String(incomeTotal), averageWeeklyIncomeJpy: String(averageWeeklyIncome), weeklyBasicsJpy: String(weeklyBasics), cashCoverageWeeks, fulfillmentRate };
+  const stageAndMusicCount = contents.filter((item) => ["LIVE_MUSIC", "LIVE_COLLAB"].includes(item.actionId)).length;
+  const { livelihood, creator, stage, community, brand, reach } = thresholds;
   const evaluators = {
-    livelihood: { achieved: reports.length >= 8 && averageWeeklyIncome >= weeklyBasics && cashCoverageWeeks >= 4 && averageStress < 70 && fulfillmentRate >= 80, measures: common },
-    creator: { achieved: portfolioCount >= 3 && contents.length >= 8 && directionCounts >= 2, measures: { portfolioCount, publishedContentCount: contents.length, contentFormats: directionCounts, ...common } },
-    stage: { achieved: contents.filter((item) => ["LIVE_MUSIC", "LIVE_COLLAB"].includes(item.actionId)).length >= 6 && collaborationCount >= 2 && state.performer.abilities.performance >= 60, measures: { stageAndMusicCount: contents.filter((item) => ["LIVE_MUSIC", "LIVE_COLLAB"].includes(item.actionId)).length, collaborationCount, performance: state.performer.abilities.performance, ...common } },
-    community: { achieved: state.metrics.active28dEstimate >= 1000 && fulfillmentRate >= 80 && averageStress < 70, measures: { active28dEstimate: state.metrics.active28dEstimate, fulfillmentRate, averageStress } },
-    brand: { achieved: playerOwnedAssets >= 2 && sourceCount >= 3 && cashCoverageWeeks >= 4, measures: { playerOwnedAssets, incomeSourceCount: sourceCount, cashCoverageWeeks } },
-    reach: { achieved: state.metrics.active28dEstimate >= 10000 && contents.length >= 16 && directionCounts >= 3, measures: { active28dEstimate: state.metrics.active28dEstimate, publishedContentCount: contents.length, contentFormats: directionCounts } },
+    livelihood: { achieved: reports.length >= livelihood.sampleWeeks && averageWeeklyIncome >= weeklyBasics && cashCoverageWeeks >= livelihood.cashCoverageWeeks && averageStress < livelihood.averageStressBelow && fulfillmentRate >= livelihood.fulfillmentRate, measures: common },
+    creator: { achieved: portfolioCount >= creator.portfolioCount && contents.length >= creator.publishedContentCount && directionCounts >= creator.contentFormats, measures: { portfolioCount, publishedContentCount: contents.length, contentFormats: directionCounts, ...common } },
+    stage: { achieved: stageAndMusicCount >= stage.stageAndMusicCount && collaborationCount >= stage.collaborationCount && state.performer.abilities.performance >= stage.performance, measures: { stageAndMusicCount, collaborationCount, performance: state.performer.abilities.performance, ...common } },
+    community: { achieved: state.metrics.active28dEstimate >= community.active28dEstimate && fulfillmentRate >= community.fulfillmentRate && averageStress < community.averageStressBelow, measures: { active28dEstimate: state.metrics.active28dEstimate, fulfillmentRate, averageStress } },
+    brand: { achieved: playerOwnedAssets >= brand.playerOwnedAssets && sourceCount >= brand.incomeSourceCount && cashCoverageWeeks >= brand.cashCoverageWeeks, measures: { playerOwnedAssets, incomeSourceCount: sourceCount, cashCoverageWeeks } },
+    reach: { achieved: state.metrics.active28dEstimate >= reach.active28dEstimate && contents.length >= reach.publishedContentCount && directionCounts >= reach.contentFormats, measures: { active28dEstimate: state.metrics.active28dEstimate, publishedContentCount: contents.length, contentFormats: directionCounts } },
   };
-  return { goalId: state.performer.careerGoal, ...evaluators[state.performer.careerGoal] };
+  const goalId = state.performer.careerGoal;
+  return { goalId, careerMode: careerModeOf(state).id, thresholds: thresholds[goalId], ...evaluators[goalId] };
 }
 
 export function generateCareerRetrospective(state) {
-  const existing = state.careerRetrospectives?.find((item) => item.throughWeek === 104);
+  const throughWeek = state.weekIndex;
+  const existing = state.careerRetrospectives?.find((item) => item.throughWeek === throughWeek);
   if (existing) return existing;
   const incomeTotals = Object.fromEntries(["scCreatorEarned", "membershipCreatorEarned", "adsCreatorEarned", "sponsorCreatorEarned", "royaltyCreatorEarned", "projectProfit"].map((key) => [key, state.finance[key] || "0"]));
-  const reports = state.history.weeklyReports.slice(0, 104);
+  const reports = state.history.weeklyReports.slice(0, throughWeek);
   const averageFatigue = reports.length ? Math.round(reports.reduce((sum, report) => sum + report.state.fatigue, 0) / reports.length) : state.performer.fatigue;
   const averageStress = reports.length ? Math.round(reports.reduce((sum, report) => sum + report.state.stress, 0) / reports.length) : state.performer.stress;
   const retrospective = {
-    id: "career_retrospective_104",
-    throughWeek: 104,
+    id: `career_retrospective_${throughWeek}`,
+    throughWeek,
+    careerMode: careerModeOf(state).id,
     works: { published: state.history.contents.length, portfolio: state.history.portfolioWorks.length, projects: state.projects.filter((item) => ["PUBLISHED", "LONG_TAIL", "ARCHIVED", "SETTLED"].includes(item.status)).length },
     collaborations: { completed: state.collaborationHistory.length, partners: new Set(state.collaborationHistory.map((item) => item.npcId)).size },
     transfers: { total: state.transferCases.length, completed: state.transferCases.filter((item) => ["CLOSED", "REBUILDING", "SWITCHED"].includes(item.status)).length, affiliationHistory: state.affiliationHistory.length },
@@ -133,27 +165,28 @@ export function generateCareerRetrospective(state) {
 }
 
 export function continueAfterRetrospective(sourceState) {
-  if (sourceState.phase !== "RETROSPECTIVE" || sourceState.weekIndex !== 104) return { ok: false, code: "RETROSPECTIVE_NOT_READY", message: "当前没有待确认的两年回顾" };
+  if (!atPendingRetrospective(sourceState)) return { ok: false, code: "RETROSPECTIVE_NOT_READY", message: "当前没有待确认的生涯回顾" };
   const state = structuredClone(sourceState);
-  state.weekIndex = 105;
+  state.previousPlan = structuredClone(state.plan);
+  state.weekIndex += 1;
   state.phase = "PLANNING";
   state.plan = Array.from({ length: 14 }, (_, index) => ({ index, actionId: [5, 9, 12, 13].includes(index) ? "LIFE" : null, locked: [12, 13].includes(index), flexibleLife: [5, 9].includes(index), pairId: null, targetId: null, targetType: null }));
   state.metrics.subscriberDelta = 0;
-  ensureWorldWeek(state, 105);
+  ensureWorldWeek(state, state.weekIndex);
   ensureWeeklyEvent(state);
   state.snapshotVersion += 1;
   return { ok: true, state };
 }
 
 export function endCareer(sourceState, { outcomeId, date }) {
-  if (sourceState.phase !== "RETROSPECTIVE" || sourceState.weekIndex !== 104) return { ok: false, code: "RETROSPECTIVE_NOT_READY", message: "当前没有待确认的两年回顾" };
+  if (!atPendingRetrospective(sourceState)) return { ok: false, code: "RETROSPECTIVE_NOT_READY", message: "当前没有待确认的生涯回顾" };
   if (!CAREER_ENDING_TYPES.includes(outcomeId)) return { ok: false, code: "INVALID_CAREER_ENDING", message: "生涯结果类型不存在" };
   const state = structuredClone(sourceState);
   state.phase = "CAREER_ENDED";
   state.careerEnding = {
     outcomeId,
     endedAt: date,
-    throughWeek: 104,
+    throughWeek: state.weekIndex,
     voluntary: true,
     goalEvaluation: evaluateCareerGoal(state),
     retrospectiveId: state.careerRetrospectives.at(-1)?.id || null,

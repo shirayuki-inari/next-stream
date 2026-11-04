@@ -11,6 +11,7 @@ import {
   settleMerchProject,
 } from "../src/domain/merch.js";
 import { validateGameState } from "../src/storage.js";
+import { continueAfterRetrospective, isCareerReviewWeek } from "../src/domain/career.js";
 
 export const ROUTE_IDS = Object.freeze(["indie", "homolive", "niji2434"]);
 export const STRATEGY_IDS = Object.freeze(["conservative", "trend", "music", "merch"]);
@@ -204,7 +205,7 @@ function objectiveScores(state) {
   };
 }
 
-export async function runTrajectory({ routeId, strategyId, seed, weeks = 104, validateEveryWeek = false, returnState = false } = {}) {
+export async function runTrajectory({ routeId, strategyId, seed, weeks = 104, careerModeId = "standard", validateEveryWeek = false, returnState = false } = {}) {
   if (!ROUTE_IDS.includes(routeId)) throw new Error(`unknown route: ${routeId}`);
   if (!STRATEGY_IDS.includes(strategyId)) throw new Error(`unknown strategy: ${strategyId}`);
   let state = createGame({
@@ -215,6 +216,7 @@ export async function runTrajectory({ routeId, strategyId, seed, weeks = 104, va
     primaryLanguage: "jp",
     primaryDirection: "creative",
     careerGoal: "creator",
+    careerModeId,
     seed,
     abilities: BALANCED_ABILITIES,
   });
@@ -239,10 +241,11 @@ export async function runTrajectory({ routeId, strategyId, seed, weeks = 104, va
       assertTrajectoryIntegrity(state);
       checkpoints[week] = metricSnapshot(state, week);
     } else if (validateEveryWeek) assertTrajectoryIntegrity(state);
-    if (week < weeks || week === 104) state = unwrap(acknowledgeReport(state), `acknowledge week ${week}`);
+    const reviewWeek = isCareerReviewWeek(state, week);
+    if (week < weeks || reviewWeek) state = unwrap(acknowledgeReport(state), `acknowledge week ${week}`);
+    if (reviewWeek && state.phase !== "RETROSPECTIVE") throw new Error(`week ${week} did not reach retrospective: ${state.phase}`);
+    if (reviewWeek && week < weeks) state = unwrap(continueAfterRetrospective(state), `continue after week ${week}`);
   }
-
-  if (weeks === 104 && state.phase !== "RETROSPECTIVE") throw new Error(`104-week run did not reach retrospective: ${state.phase}`);
   assertTrajectoryIntegrity(state);
   const final = checkpoints[weeks] || metricSnapshot(state, weeks);
   const sustainable = BigInt(final.cashFreeJpy) > 0n
@@ -254,6 +257,7 @@ export async function runTrajectory({ routeId, strategyId, seed, weeks = 104, va
   const summary = {
     routeId,
     strategyId,
+    careerModeId,
     seed,
     weeks,
     checkpoints,
