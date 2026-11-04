@@ -12,7 +12,12 @@ if (globalThis.process?.versions?.node) {
 export async function deterministicRandom(seed, weekIndex, systemId, entityId, drawIndex) {
   const scope = [seed, weekIndex, systemId, entityId, drawIndex].join("/");
   const digest = nodeSha256 ? nodeSha256(scope) : await crypto.subtle.digest("SHA-256", encoder.encode(scope));
-  const view = new DataView(digest.buffer, digest.byteOffset || 0, digest.byteLength);
+  return uniformFromDigest(digest);
+}
+
+/** Node 返回 Buffer（ArrayBuffer 视图），Web Crypto 返回裸 ArrayBuffer；两者取相同的前 8 字节。 */
+export function uniformFromDigest(digest) {
+  const view = digest instanceof ArrayBuffer ? new DataView(digest) : new DataView(digest.buffer, digest.byteOffset, digest.byteLength);
   const value = view.getBigUint64(0, false) >> 11n;
   return Number(value) / 2 ** 53;
 }
