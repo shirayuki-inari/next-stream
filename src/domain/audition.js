@@ -165,7 +165,7 @@ export function createAuditionApplication(sourceState, { agencyId, date }) {
     conditionalOfferExpiresAt: null,
     offerExtensionUsed: false,
     contractHandlingProgress: state.affiliation?.agencyId ? 0 : 1,
-    feedback: "草案不会占用当期名额；提交时才冻结资格、作品与分数。",
+    feedback: "草案不占用当期名额；提交后锁定资格、作品与分数。",
     createdAt: date,
     lastActionAt: date,
   };

@@ -158,7 +158,7 @@ export function generateCareerRetrospective(state) {
     healthLoad: { averageFatigue, averageStress, currentPhysicalCondition: state.performer.physicalCondition },
     keyChoices: state.textEvents.filter((event) => event.decisions.length).slice(-12).map((event) => ({ eventId: event.id, title: event.title, choices: event.decisions.map((decision) => decision.choiceId) })),
     goalEvaluation: evaluateCareerGoal(state),
-    outcomePolicy: "继续、暂停、兼职、毕业、独立或留社均是正常结果；不以百万订阅作为统一成败线。",
+    outcomePolicy: "继续、暂停、兼职、毕业、转为个人势或留在企业均为正常结果，按所选职业目标评估。",
   };
   state.careerRetrospectives.push(retrospective);
   return retrospective;

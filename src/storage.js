@@ -53,7 +53,7 @@ function requireMoneyMap(value, label) {
 }
 
 function assertReferencesAndRules(game) {
-  if (!game.rulesets || Object.entries(RULESET_IDS).some(([key, id]) => game.rulesets[key] !== id)) throw new Error("UNSUPPORTED_RULESET：存档绑定的冻结规则包不可用");
+  if (!game.rulesets || Object.entries(RULESET_IDS).some(([key, id]) => game.rulesets[key] !== id)) throw new Error("UNSUPPORTED_RULESET：存档所需的规则版本不可用");
   if (game.rulesets.careerModes != null && game.rulesets.careerModes !== CAREER_MODES.id) throw new Error("UNSUPPORTED_RULESET：存档绑定的生涯模式规则包不可用");
   if (game.careerMode != null && !Object.hasOwn(CAREER_MODES.modes, game.careerMode)) throw new Error("存档包含未知的生涯模式");
   if (!Array.isArray(game.plan) || game.plan.length !== 14 || game.plan.some((slot, index) => slot.index !== index || (slot.actionId && !ACTIONS[slot.actionId]))) throw new Error("存档排期包含非法格号或活动 ID");
@@ -215,7 +215,7 @@ async function writeIndexedSave(serialized, metadata) {
     backupsRequest.onsuccess = stageWrites;
     metadataRequest.onsuccess = stageWrites;
     transaction.oncomplete = () => { database.close(); cachedMetadata = metadata; resolve(); };
-    transaction.onerror = () => { database.close(); reject(transaction.error || new Error("IndexedDB 原子写入失败")); };
+    transaction.onerror = () => { database.close(); reject(transaction.error || new Error("存档写入失败（IndexedDB）")); };
     transaction.onabort = transaction.onerror;
   });
 }

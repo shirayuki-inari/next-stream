@@ -148,7 +148,7 @@ export function resolveTextEvent(sourceState, { eventId, choiceId, useSafeDefaul
   if (!selected) return { ok: false, code: "EVENT_CHOICE_INVALID", message: "事件选项无效" };
   if (!(selected.requirements || []).every((requirement) => conditionMatches(state, requirement))) return { ok: false, code: "EVENT_REQUIREMENT_UNMET", message: "当前状态不满足这个选项的条件" };
   const totalCost = selected.costs.reduce((sum, cost) => sum + BigInt(cost.amountJpy), 0n);
-  if (BigInt(state.cash.free) < totalCost) return { ok: false, code: "INSUFFICIENT_FREE_CASH", message: "自由现金不足，仍可选择安全默认方案" };
+  if (BigInt(state.cash.free) < totalCost) return { ok: false, code: "INSUFFICIENT_FREE_CASH", message: "自由现金不足，可选择默认选项" };
   if (totalCost > 0n) {
     state.cash.free = String(BigInt(state.cash.free) - totalCost);
     state.history.journalEntries.push({ id: `journal_${event.id}_s${event.stageIndex}`, date: state.worldWeeks.find((item) => item.weekIndex === state.weekIndex)?.startDate || state.createdAt, sourceId: event.id, lines: [{ account: "EVENT_EXPENSE", debit: String(totalCost), credit: "0" }, { account: "CASH_FREE", debit: "0", credit: String(totalCost) }] });
