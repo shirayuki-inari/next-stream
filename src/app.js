@@ -302,10 +302,42 @@ function phaseLabel() {
   return "运行中";
 }
 
+const NAV_ITEMS = [["overview", "周总览"], ["schedule", "排期"], ["channel", "频道"], ["projects", "项目"], ["industry", "关系／行业"], ["finance", "财务"], ["career", "职业／合同"], ["life", "生涯"], ["settings", "设置／存档"]];
+// 手机底部导航只放高频页面，其余收进「更多」。
+const BOTTOM_NAV_ITEMS = [["overview", "总览"], ["schedule", "排期"], ["channel", "频道"], ["finance", "财务"]];
+const MORE_NAV_IDS = ["projects", "industry", "career", "life", "settings"];
+
+function bottomNav() {
+  const moreActive = MORE_NAV_IDS.includes(ui.view);
+  return `<nav class="bottom-nav" aria-label="主要页面（底部）">
+    ${BOTTOM_NAV_ITEMS.map(([id, label]) => `<button data-view="${id}" class="${ui.view === id ? "active" : ""}" ${ui.view === id ? `aria-current="page"` : ""}>${label}</button>`).join("")}
+    <button data-open-more class="${moreActive ? "active" : ""}" aria-haspopup="dialog" aria-expanded="${Boolean(ui.moreOpen)}" ${moreActive ? `aria-label="更多（当前：${NAV_ITEMS.find(([id]) => id === ui.view)[1]}）"` : ""}>更多</button>
+  </nav>`;
+}
+
+function moreSheet() {
+  if (!ui.moreOpen) return "";
+  return `<div class="dialog-backdrop more-backdrop" data-close-more><section class="more-sheet" role="dialog" aria-modal="true" aria-labelledby="more-title" tabindex="-1" data-more-panel>
+    <header><b id="more-title">更多页面</b><button class="sheet-close" data-dismiss-more aria-label="关闭">×</button></header>
+    ${NAV_ITEMS.filter(([id]) => MORE_NAV_IDS.includes(id)).map(([id, label]) => `<button data-view="${id}" class="${ui.view === id ? "active" : ""}">${label}<span aria-hidden="true">→</span></button>`).join("")}
+  </section></div>`;
+}
+
+// 手机底部操作栏：阻塞阶段（待提交、周报）在任何页面都显示；排期阶段只在排期页显示推进按钮。
+function mobileActionBar() {
+  if (game.phase === "READY_TO_COMMIT") return `<div class="action-bar"><span><b>本周结果已暂存</b><small>正式存档尚未改变</small></span><button class="primary-action" data-commit-week ${ui.busy ? "disabled" : ""}>${ui.busy ? "正在提交…" : "提交周结算 →"}</button></div>`;
+  if (game.phase === "REPORT") return `<div class="action-bar"><span><b>本周已结算</b><small>确认周报后进入下一轮排期</small></span><button class="primary-action" data-open-report>查看周报 →</button></div>`;
+  if (game.phase !== "PLANNING" || ui.view !== "schedule") return "";
+  const preview = previewWeek(game);
+  const riskLabel = preview.risk === "low" ? "负荷可控" : preview.risk === "medium" ? "需要留意" : "建议减量";
+  return `<div class="action-bar" data-risk="${preview.risk}"><span><b>工作格 ${preview.workSlots}/12 · ${riskLabel}</b><small>预计疲劳 ${preview.projectedFatigue} · 压力 ${preview.projectedStress} · 直播 ${preview.liveCount} 场</small></span><button class="primary-action" data-settle ${ui.busy ? "disabled" : ""}>${ui.busy ? "正在结算…" : "推进本周 →"}</button></div>`;
+}
+
 function shell(content) {
   const range = weekDateRange(game.weekIndex);
   const reviewWeek = nextCareerReviewWeek(game);
-  return `<div class="game-shell">
+  const actionBar = mobileActionBar();
+  return `<div class="game-shell ${actionBar ? "has-action-bar" : ""}">
     <header class="topbar">
       <button class="brand-lockup brand-button" data-view="overview" aria-label="返回周总览"><span class="brand-signal" aria-hidden="true"></span><span>下一场直播</span></button>
       <div class="week-clock"><span>WEEK ${String(game.weekIndex).padStart(3, "0")}${reviewWeek ? ` / ${String(reviewWeek).padStart(3, "0")}` : ""}</span><b>${dateLabel(range.start)} — ${dateLabel(range.end)}</b><i>${phaseLabel()}</i></div>
@@ -313,11 +345,14 @@ function shell(content) {
       <div class="identity-chip"><span>${escapeHtml(game.character.name).slice(0, 1)}</span><div><b>${escapeHtml(game.character.name)}</b><small>${affiliationLabel()}</small></div></div>
     </header>
     <nav class="primary-nav" aria-label="主要页面">
-      ${[["overview", "周总览"], ["schedule", "排期"], ["channel", "频道"], ["projects", "项目"], ["industry", "关系／行业"], ["finance", "财务"], ["career", "职业／合同"], ["life", "生涯"], ["settings", "设置／存档"]].map(([id, label]) => `<button data-view="${id}" class="${ui.view === id ? "active" : ""}">${label}</button>`).join("")}
+      ${NAV_ITEMS.map(([id, label]) => `<button data-view="${id}" class="${ui.view === id ? "active" : ""}" ${ui.view === id ? `aria-current="page"` : ""}>${label}</button>`).join("")}
     </nav>
     ${ui.notice ? `<div class="toast ${ui.notice.tone}" role="status"><span>${escapeHtml(ui.notice.text)}</span><button data-dismiss-notice aria-label="关闭提示">×</button></div>` : ""}
     <main class="workspace">${content}</main>
     <footer class="app-footer"><span>规则快照：${escapeHtml(game.rulesets.balance)}</span><span>模拟货币 · 本地存档 · 不连接真实账号</span></footer>
+    ${actionBar}
+    ${bottomNav()}
+    ${moreSheet()}
     ${activityDialog()}
     ${ui.reportOpen && game.phase === "REPORT" ? reportDialog() : ""}
   </div>`;
@@ -380,7 +415,7 @@ function pendingEventStrip() {
 function scheduleView() {
   const preview = previewWeek(game);
   return `<section class="page-stack">
-    <div class="page-heading compact-heading"><div><p class="eyebrow">WEEKLY RUNDOWN / 14 SLOTS</p><h1>本周排期</h1><p>选择时间格，再选择活动。移动端与键盘均无需拖拽。</p></div><div class="heading-actions"><button class="secondary-action" data-repeat-plan ${game.phase !== "PLANNING" || !game.previousPlan ? "disabled" : ""} ${game.previousPlan ? "" : `title="完成第一周后可用"`}>沿用上周排期</button><button class="secondary-action" data-auto-plan ${game.phase !== "PLANNING" ? "disabled" : ""}>填入稳健示例</button><button class="primary-action" data-settle ${ui.busy || !["PLANNING", "READY_TO_COMMIT"].includes(game.phase) ? "disabled" : ""}>${ui.busy ? "正在结算…" : game.phase === "READY_TO_COMMIT" ? "提交周结算 →" : game.phase === "REPORT" ? "已结算" : "推进本周 →"}</button></div></div>
+    <div class="page-heading compact-heading"><div><p class="eyebrow">WEEKLY RUNDOWN / 14 SLOTS</p><h1>本周排期</h1><p>选择时间格，再选择活动。移动端与键盘均无需拖拽。</p></div><div class="heading-actions schedule-actions"><button class="secondary-action" data-repeat-plan ${game.phase !== "PLANNING" || !game.previousPlan ? "disabled" : ""} ${game.previousPlan ? "" : `title="完成第一周后可用"`}>沿用上周排期</button><button class="secondary-action" data-auto-plan ${game.phase !== "PLANNING" ? "disabled" : ""}>填入稳健示例</button><button class="primary-action" data-settle ${ui.busy || !["PLANNING", "READY_TO_COMMIT"].includes(game.phase) ? "disabled" : ""}>${ui.busy ? "正在结算…" : game.phase === "READY_TO_COMMIT" ? "提交周结算 →" : game.phase === "REPORT" ? "已结算" : "推进本周 →"}</button></div></div>
     ${pendingEventStrip()}
     <div class="schedule-summary" data-risk="${preview.risk}">
       <div><span>工作格</span><b>${preview.workSlots}<small> / 12</small></b></div><div><span>直播</span><b>${preview.liveCount}<small> 场</small></b></div><div><span>预计疲劳</span><b>${preview.projectedFatigue}<small> / 100</small></b></div><div><span>预计压力</span><b>${preview.projectedStress}<small> / 100</small></b></div>
@@ -827,7 +862,7 @@ function activityDialog() {
   const projectSection = designProjects.length ? `<section class="sponsor-pick project-pick"><h3>商品制作 · 项目工作</h3><div>${designProjects.map((project) => { const nextStep = project.salesMode === "DIGITAL" ? "完成后可直接开售" : project.salesMode === "READY_STOCK" ? "完成后进入备货等待" : "完成后仍需等待打样"; return `<button data-choose-action="PROJECT_WORK" data-target-id="${escapeHtml(project.id)}" data-target-type="MERCH_PROJECT"><i class="action-swatch tone-cyan"></i><span><b>${escapeHtml(project.title)}</b><small>1 格 · 设计 ${project.designWorkCompleted}/${project.designWorkRequired} · ${nextStep}</small></span><em>→</em></button>`; }).join("")}</div></section>` : "";
   const longProjectSection = longWorkProjects.length ? `<section class="sponsor-pick project-pick"><h3>长期作品 · 项目工作</h3><div>${longWorkProjects.map((project) => `<button data-choose-action="PROJECT_WORK" data-target-id="${escapeHtml(project.id)}" data-target-type="LONG_TERM_PROJECT"><i class="action-swatch tone-cyan"></i><span><b>${escapeHtml(project.title)}</b><small>1 格 · 工作 ${project.workCompleted}/${project.workRequired} · 最早 ${project.earliestPublishDate}</small></span><em>→</em></button>`).join("")}</div></section>` : "";
   const sponsorSection = acceptedSponsors.length ? `<section class="sponsor-pick"><h3>已签交付 · 优先</h3><div>${acceptedSponsors.map((deal) => `<button data-choose-action="EDIT_VIDEO" data-target-id="${escapeHtml(deal.id)}" data-target-type="SPONSOR"><i class="action-swatch tone-violet"></i><span><b>${escapeHtml(deal.brandName)} 商单内容</b><small>1 格 · ${deal.dueDate} 前交付 · 已签合同</small></span><em>→</em></button>`).join("")}</div></section>` : "";
-  return `<div class="dialog-backdrop" data-close-dialog><section class="activity-drawer" role="dialog" aria-modal="true" aria-labelledby="activity-title" tabindex="-1" data-dialog-panel><header><div><span>${day} · ${TIME_NAMES[ui.selectedSlot % 2]}</span><h2 id="activity-title">安排一个活动</h2></div><button data-close-dialog aria-label="关闭">×</button></header><div class="activity-groups">${collaborationSection}${transferSection}${auditionSection}${promiseSection}${longProjectSection}${projectSection}${sponsorSection}${groups.map(([name, ids]) => `<section><h3>${name}</h3><div>${ids.map((id) => { const action = ACTIONS[id]; return `<button data-choose-action="${id}" ${action.unavailable ? "disabled" : ""}><i class="action-swatch tone-${action.tone}"></i><span><b>${action.label}</b><small>${action.unavailable || `${action.slots} 格 · 疲劳 ${signed(action.fatigue)} · 压力 ${signed(action.stress)}${action.income ? ` · 到账 ${money(action.income)}` : ""}`}</small></span><em>→</em></button>`; }).join("")}</div></section>`).join("")}</div>${slot.flexibleLife ? `<footer><span>此格原为生活保留时间。</span><label><input type="checkbox" data-confirm-life /> 我确认把这一格转为工作</label></footer>` : ""}</section></div>`;
+  return `<div class="dialog-backdrop" data-close-dialog><section class="activity-drawer" role="dialog" aria-modal="true" aria-labelledby="activity-title" tabindex="-1" data-dialog-panel><header><div><span>${day} · ${TIME_NAMES[ui.selectedSlot % 2]}</span><h2 id="activity-title">安排一个活动</h2></div><button data-close-dialog aria-label="关闭">×</button></header>${slot.actionId && !slot.locked && !slot.flexibleLife ? `<div class="drawer-current"><span>当前安排<b>${ACTIONS[slot.actionId].label}</b></span><button class="secondary-action" data-remove-slot="${ui.selectedSlot}">清空此格</button></div>` : ""}<div class="activity-groups">${collaborationSection}${transferSection}${auditionSection}${promiseSection}${longProjectSection}${projectSection}${sponsorSection}${groups.map(([name, ids]) => `<section><h3>${name}</h3><div>${ids.map((id) => { const action = ACTIONS[id]; return `<button data-choose-action="${id}" ${action.unavailable ? "disabled" : ""}><i class="action-swatch tone-${action.tone}"></i><span><b>${action.label}</b><small>${action.unavailable || `${action.slots} 格 · 疲劳 ${signed(action.fatigue)} · 压力 ${signed(action.stress)}${action.income ? ` · 到账 ${money(action.income)}` : ""}`}</small></span><em>→</em></button>`; }).join("")}</div></section>`).join("")}</div>${slot.flexibleLife ? `<footer><span>此格原为生活保留时间。</span><label><input type="checkbox" data-confirm-life /> 我确认把这一格转为工作</label></footer>` : ""}</section></div>`;
 }
 
 function reportSummary(report, includeDetails = true) {
@@ -920,6 +955,7 @@ function render() {
   if (!game) return renderCreation();
   const views = { overview: overviewView, schedule: scheduleView, channel: channelView, projects: projectsView, industry: industryView, finance: financeView, career: careerView, life: lifeView, settings: settingsView };
   root.innerHTML = shell((views[ui.view] || overviewView)());
+  restoreFolds();
   scheduleNoticeDismiss();
   root.classList.toggle("reduce-motion", game.preferences.reduceMotion);
   if (game.phase === "RETROSPECTIVE") root.insertAdjacentHTML("beforeend", retrospectiveDialog());
@@ -929,18 +965,65 @@ function render() {
   requestAnimationFrame(() => {
     if (ui.confirmation) root.querySelector("[data-confirm-dialog]")?.focus();
     else if (ui.selectedSlot != null) root.querySelector("[data-dialog-panel]")?.focus();
+    else if (ui.moreOpen) root.querySelector("[data-more-panel] button")?.focus();
     else if (ui.reportOpen) root.querySelector("[data-close-report]")?.focus();
     else if (ui.focusReturn) {
-      const target = root.querySelector(ui.focusReturn);
-      if (target?.getClientRects().length) target.focus();
-      else root.querySelector(`[data-view="${ui.view}"]`)?.focus();
+      const target = firstVisible(ui.focusReturn) || firstVisible(`[data-view="${ui.view}"]`);
+      target?.focus();
       ui.focusReturn = null;
     }
+    centerActiveTab();
+  });
+}
+
+function firstVisible(selector) {
+  return [...root.querySelectorAll(selector)].find((node) => node.getClientRects().length) || null;
+}
+
+function closeMoreSheet() {
+  ui.moreOpen = false;
+  ui.focusReturn = "[data-open-more]";
+  render();
+}
+
+// 平板宽度下顶部导航横向滚动，保证当前页标签始终可见。只改导航自身的 scrollLeft，不滚动页面。
+function centerActiveTab() {
+  const nav = root.querySelector(".primary-nav");
+  const active = nav?.querySelector("button.active");
+  if (!active || nav.scrollWidth <= nav.clientWidth) return;
+  nav.scrollLeft = active.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2;
+}
+
+// 整页重绘会重置 <details> 的展开状态。按「页面 + 面板标题」记住玩家手动展开或收起的面板；
+// 若模板给出的默认状态发生变化（如筛选切换、出现紧急事项），以模板为准并丢弃旧记录。
+function foldKeyOf(detail, seen) {
+  const summary = detail.querySelector(":scope > summary");
+  const base = detail.id || summary?.dataset.contentControl || (summary?.querySelector("b")?.textContent || summary?.textContent || "").trim();
+  const occurrence = seen.get(base) || 0;
+  seen.set(base, occurrence + 1);
+  return `${ui.view}|${base}|${occurrence}`;
+}
+
+function restoreFolds() {
+  ui.folds ||= {};
+  ui.foldDefaults ||= {};
+  const seen = new Map();
+  root.querySelectorAll("details").forEach((detail) => {
+    const key = foldKeyOf(detail, seen);
+    detail.dataset.foldKey = key;
+    const templateOpen = detail.open;
+    const previousDefault = ui.foldDefaults[key];
+    ui.foldDefaults[key] = templateOpen;
+    if (!(key in ui.folds)) return;
+    if (previousDefault !== undefined && previousDefault !== templateOpen) { delete ui.folds[key]; return; }
+    detail.open = ui.folds[key];
+    const marker = detail.querySelector(":scope > summary > i");
+    if (marker) marker.textContent = detail.open ? "收起" : "展开";
   });
 }
 
 function bindGame() {
-  root.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => { ui.view = button.dataset.view; ui.selectedSlot = null; ui.notice = null; render(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
+  root.querySelectorAll("[data-view]").forEach((button) => button.addEventListener("click", () => { ui.view = button.dataset.view; ui.selectedSlot = null; ui.moreOpen = false; ui.notice = null; render(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
   root.querySelectorAll("[data-finance-filter]").forEach((button) => button.addEventListener("click", () => { ui.financeFilter = button.dataset.financeFilter; ui.financeTransactionsOpen = true; ui.financeTransactionLimit = 40; render(); }));
   root.querySelector("[data-load-more-content]")?.addEventListener("click", () => { ui.contentLimit += 40; render(); });
   root.querySelector("[data-load-more-transactions]")?.addEventListener("click", () => { ui.financeTransactionLimit += 40; ui.financeTransactionsOpen = true; render(); });
@@ -1041,8 +1124,9 @@ function bindGame() {
   root.querySelector("[data-dismiss-notice]")?.addEventListener("click", () => { ui.notice = null; render(); });
   root.querySelectorAll("[data-pick-slot]").forEach((button) => button.addEventListener("click", () => { ui.selectedSlot = Number(button.dataset.pickSlot); render(); }));
   root.querySelectorAll("[data-remove-slot]").forEach((button) => button.addEventListener("click", async () => {
-    const result = await dispatchCommand("REMOVE_PLAN_ACTION", { slotIndex: Number(button.dataset.removeSlot) });
-    if (result.ok) { game = result.state; await saveGame(game); }
+    const slotIndex = Number(button.dataset.removeSlot);
+    const result = await dispatchCommand("REMOVE_PLAN_ACTION", { slotIndex });
+    if (result.ok) { game = result.state; await saveGame(game); ui.selectedSlot = null; ui.focusReturn = `[data-pick-slot="${slotIndex}"]`; }
     else ui.notice = { tone: "error", text: result.message };
     render();
   }));
@@ -1057,8 +1141,11 @@ function bindGame() {
   }));
   root.querySelector("[data-auto-plan]")?.addEventListener("click", applySafePlan);
   root.querySelector("[data-repeat-plan]")?.addEventListener("click", repeatPreviousPlan);
-  root.querySelector("[data-settle]")?.addEventListener("click", runWeek);
-  root.querySelector("[data-commit-week]")?.addEventListener("click", runWeek);
+  // 页面标题区与手机底部操作栏可能同时存在同一操作。
+  root.querySelectorAll("[data-settle], [data-commit-week]").forEach((button) => button.addEventListener("click", runWeek));
+  root.querySelectorAll("[data-open-more]").forEach((button) => button.addEventListener("click", () => { ui.moreOpen = true; render(); }));
+  root.querySelector("[data-close-more]")?.addEventListener("click", (event) => { if (event.target === event.currentTarget) closeMoreSheet(); });
+  root.querySelector("[data-dismiss-more]")?.addEventListener("click", closeMoreSheet);
   root.querySelector("[data-apply-fan-funding]")?.addEventListener("click", async () => {
     if (!confirm("提交后进入 7 个游戏日审核。确认接受本游戏的模拟商业条款，并申请开启 SC 与会员功能吗？")) return;
     const result = await dispatchCommand("APPLY_FAN_FUNDING", { date: weekDateRange(game.weekIndex).start });
@@ -1282,7 +1369,7 @@ function bindGame() {
     } else ui.notice = { tone: "error", text: result.message };
     render();
   }));
-  root.querySelector("[data-open-report]")?.addEventListener("click", () => { ui.focusReturn = "[data-open-report]"; ui.reportOpen = true; render(); });
+  root.querySelectorAll("[data-open-report]").forEach((button) => button.addEventListener("click", () => { ui.focusReturn = "[data-open-report]"; ui.reportOpen = true; render(); }));
   root.querySelectorAll("[data-close-report]").forEach((button) => button.addEventListener("click", () => { ui.reportOpen = false; render(); }));
   root.querySelector("[data-next-week]")?.addEventListener("click", async () => { const result = await dispatchCommand("ACKNOWLEDGE_REPORT", { weekIndex: game.weekIndex }); if (result.ok) { game = result.state; await saveGame(game); ui.reportOpen = false; ui.view = game.phase === "PLANNING" ? "schedule" : "overview"; ui.notice = game.phase === "RETROSPECTIVE" ? null : { tone: "success", text: `第 ${game.weekIndex} 周已开始，直接进入排期。行业与现实时间不会在你离开时自行推进。` }; render(); } });
   root.querySelector("[data-export]")?.addEventListener("click", async () => {
@@ -1300,7 +1387,11 @@ function bindGame() {
     if (accepted) { await clearGame(); game = null; ui = { view: "overview", selectedSlot: null, notice: null, busy: false, createRoute: "indie", abilityPreset: "balanced", reportOpen: false, confirmation: null, focusReturn: null, creationDraft: null, financeFilter: "ALL", financeTransactionsOpen: false, financeTransactionLimit: 40, financeJournalLimit: 40, contentLimit: 40, lifeFilter: "ALL" }; render(); }
   });
   root.querySelectorAll("[data-toggle-detail]").forEach((button) => button.addEventListener("click", () => { const detail = root.querySelector(`#${button.dataset.toggleDetail}`); if (detail) { detail.open = true; detail.scrollIntoView({ behavior: "smooth", block: "center" }); } }));
-  root.querySelectorAll("details").forEach((detail) => detail.addEventListener("toggle", () => { const marker = detail.querySelector("summary > i"); if (marker) marker.textContent = detail.open ? "收起" : "展开"; }));
+  root.querySelectorAll("details").forEach((detail) => detail.addEventListener("toggle", () => {
+    const marker = detail.querySelector(":scope > summary > i");
+    if (marker) marker.textContent = detail.open ? "收起" : "展开";
+    if (detail.dataset.foldKey) ui.folds[detail.dataset.foldKey] = detail.open;
+  }));
 }
 
 async function repeatPreviousPlan() {
@@ -1398,11 +1489,12 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     if (ui.confirmation) { event.preventDefault(); closeConfirmation(false); return; }
     if (ui.selectedSlot != null) { event.preventDefault(); ui.focusReturn = `[data-pick-slot="${ui.selectedSlot}"]`; ui.selectedSlot = null; render(); return; }
+    if (ui.moreOpen) { event.preventDefault(); closeMoreSheet(); return; }
     if (ui.reportOpen && game?.phase === "REPORT") { event.preventDefault(); ui.reportOpen = false; render(); }
     return;
   }
   if (event.key !== "Tab") return;
-  const dialog = root.querySelector("[data-confirm-dialog], [data-dialog-panel], .report-dialog");
+  const dialog = root.querySelector("[data-confirm-dialog], [data-dialog-panel], [data-more-panel], .report-dialog");
   if (!dialog) return;
   const focusable = [...dialog.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary, [tabindex="0"]')];
   if (!focusable.length) return;
