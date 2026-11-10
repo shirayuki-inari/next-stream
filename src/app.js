@@ -214,6 +214,7 @@ function renderCreation() {
       </form>
     </section>
   </main>${ui.confirmation ? confirmationDialog() : ""}`;
+  scheduleNoticeDismiss();
   bindCreation();
   bindConfirmation();
   requestAnimationFrame(() => {
@@ -292,12 +293,23 @@ function showInlineError(form, message) {
   form.querySelector(".creation-submit").before(node);
 }
 
+function phaseLabel() {
+  if (game.phase === "PLANNING") return "排期中";
+  if (game.phase === "READY_TO_COMMIT") return "待提交";
+  if (game.phase === "REPORT") return "周报待确认";
+  if (game.phase === "RETROSPECTIVE") return `${retrospectivePeriodLabel(game.weekIndex)}回顾`;
+  if (game.phase === "CAREER_ENDED") return "生涯已归档";
+  return "运行中";
+}
+
 function shell(content) {
   const range = weekDateRange(game.weekIndex);
+  const reviewWeek = nextCareerReviewWeek(game);
   return `<div class="game-shell">
     <header class="topbar">
       <button class="brand-lockup brand-button" data-view="overview" aria-label="返回周总览"><span class="brand-signal" aria-hidden="true"></span><span>下一场直播</span></button>
-      <div class="week-clock"><span>WEEK ${String(game.weekIndex).padStart(3, "0")}${nextCareerReviewWeek(game) ? ` / ${String(nextCareerReviewWeek(game)).padStart(3, "0")}` : ""}</span><b>${dateLabel(range.start)} — ${dateLabel(range.end)}</b><i>${game.phase === "PLANNING" ? "排期中" : game.phase === "READY_TO_COMMIT" ? "待提交" : game.phase === "REPORT" ? "周报待确认" : game.phase === "RETROSPECTIVE" ? `${retrospectivePeriodLabel(game.weekIndex)}回顾` : game.phase === "CAREER_ENDED" ? "生涯已归档" : "运行中"}</i></div>
+      <div class="week-clock"><span>WEEK ${String(game.weekIndex).padStart(3, "0")}${reviewWeek ? ` / ${String(reviewWeek).padStart(3, "0")}` : ""}</span><b>${dateLabel(range.start)} — ${dateLabel(range.end)}</b><i>${phaseLabel()}</i></div>
+      <div class="mobile-status" role="group" aria-label="第 ${game.weekIndex} 周 · ${phaseLabel()} · 自由现金 ${compact(game.cash.free)} 日元"><b>W${String(game.weekIndex).padStart(3, "0")}${reviewWeek ? `<small>/${String(reviewWeek).padStart(3, "0")}</small>` : ""}</b><i>${phaseLabel()}</i><span>现金 ${compact(game.cash.free)}</span></div>
       <div class="identity-chip"><span>${escapeHtml(game.character.name).slice(0, 1)}</span><div><b>${escapeHtml(game.character.name)}</b><small>${affiliationLabel()}</small></div></div>
     </header>
     <nav class="primary-nav" aria-label="主要页面">
@@ -886,10 +898,29 @@ function bindConfirmation() {
   root.querySelectorAll("[data-confirm-choice]").forEach((button) => button.addEventListener("click", () => closeConfirmation(button.dataset.confirmChoice === "accept")));
 }
 
+// 成功提示数秒后自动淡出；错误提示保留到玩家手动关闭。只移除提示节点，不整页重绘，避免打断正在进行的操作。
+const NOTICE_AUTO_DISMISS_MS = 4000;
+let noticeTimer = null;
+let noticeTimerFor = null;
+
+function scheduleNoticeDismiss() {
+  const notice = ui.notice;
+  if (notice === noticeTimerFor) return;
+  clearTimeout(noticeTimer);
+  noticeTimerFor = notice;
+  if (!notice || notice.tone === "error") return;
+  noticeTimer = setTimeout(() => {
+    if (ui.notice !== notice) return;
+    ui.notice = null;
+    root.querySelector(".toast")?.remove();
+  }, NOTICE_AUTO_DISMISS_MS);
+}
+
 function render() {
   if (!game) return renderCreation();
   const views = { overview: overviewView, schedule: scheduleView, channel: channelView, projects: projectsView, industry: industryView, finance: financeView, career: careerView, life: lifeView, settings: settingsView };
   root.innerHTML = shell((views[ui.view] || overviewView)());
+  scheduleNoticeDismiss();
   root.classList.toggle("reduce-motion", game.preferences.reduceMotion);
   if (game.phase === "RETROSPECTIVE") root.insertAdjacentHTML("beforeend", retrospectiveDialog());
   if (ui.confirmation) root.insertAdjacentHTML("beforeend", confirmationDialog());
