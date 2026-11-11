@@ -1,5 +1,6 @@
 import { ROUTES } from "../../rules/agency_profiles.js";
 import { BALANCE } from "../../rules/balance_standard_0_1.js";
+import { weeklyExpenses } from "./costs.js";
 import { ensureWorldWeek } from "./world.js";
 import { ensureWeeklyEvent } from "./events.js";
 import { CAREER_MODES } from "../../rules/career_modes.js";
@@ -115,7 +116,7 @@ export function evaluateCareerGoal(state) {
   const averageStress = reports.length ? Math.round(reports.reduce((sum, report) => sum + report.state.stress, 0) / reports.length) : state.performer.stress;
   const incomeTotal = attributableIncomeLastEightWeeks(state);
   const averageWeeklyIncome = incomeTotal / 8n;
-  const weeklyBasics = BigInt(BALANCE.costs.weeklyLivingJpy) + BigInt(ROUTES[state.routeId].weeklyToolCost);
+  const weeklyBasics = weeklyExpenses(state).total;
   const cashCoverageWeeks = Number(BigInt(state.cash.free) / (weeklyBasics || 1n));
   const fulfillmentRate = promiseFulfillmentRate(state);
   const contents = state.history.contents || [];

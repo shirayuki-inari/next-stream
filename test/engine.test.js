@@ -1,3 +1,4 @@
+import { openingCash } from "./helpers/opening-cash.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -95,7 +96,7 @@ test("A-05 an empty week becomes rest and has no concurrent-viewer zero", async 
   const result = await settleWeek(newGame("indie", "empty-week"));
   assert.equal(result.ok, true);
   assert.equal(result.state.metrics.weeklyAverageConcurrent, null);
-  assert.equal(result.state.cash.free, "582000");
+  assert.equal(result.state.cash.free, openingCash(-18000));
   assert.equal(result.state.history.contents.length, 0);
 });
 

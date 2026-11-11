@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import { createGame, updatePlan } from "../src/domain/engine.js";
 import { startWeekRun } from "../src/domain/week_run.js";
 import { buildSavePackage, canonicalStringify, clearGame, loadBackups, loadMigratedGame, saveGame, sha256Hex, validateSavePackage } from "../src/storage.js";
-import { RULESET_MANIFEST } from "../rules/ruleset_manifest.js";
+import { RULESET_MANIFEST, SUPPORTED_RULESET_VERSIONS } from "../rules/ruleset_manifest.js";
 
 const abilities = { expression: 50, specialty: 50, performance: 50, production: 50, planning: 50, collaboration: 50 };
 
@@ -21,7 +21,9 @@ async function resign(payload) {
 test("frozen ruleset manifest hashes match the shipped rule bytes", async () => {
   const fileHash = async (path) => createHash("sha256").update(await readFile(path)).digest("hex");
   assert.equal(await fileHash("rules/platform_youtube_reference_2026_09_12_v1.js"), RULESET_MANIFEST.platform.sha256);
-  assert.equal(await fileHash("rules/balance_standard_0_1.js"), RULESET_MANIFEST.balance.sha256);
+  assert.equal(await fileHash("rules/balance_standard_0_2.js"), RULESET_MANIFEST.balance.sha256);
+  // 旧规则包必须保持字节不变，已开始的 0_1 存档才能继续按原规则结算。
+  assert.equal(await fileHash("rules/balance_standard_0_1.js"), SUPPORTED_RULESET_VERSIONS.balance.balance_standard_0_1);
   const contentHash = createHash("sha256");
   for (const path of ["rules/actions.js", "rules/agency_profiles.js", "rules/distribution_services.js", "rules/event_templates.js", "rules/npc_profiles.js"]) contentHash.update(await readFile(path));
   assert.equal(contentHash.digest("hex"), RULESET_MANIFEST.content.sha256);

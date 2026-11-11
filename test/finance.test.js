@@ -1,3 +1,4 @@
+import { openingCash } from "./helpers/opening-cash.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createGame, migrateGame, settleWeek, updatePlan } from "../src/domain/engine.js";
@@ -43,7 +44,7 @@ test("G-01 SC waterfall preserves each integer-yen layer", () => {
 test("G-02 indie SC becomes receivable without increasing free cash", () => {
   const state = game("indie", "g02");
   recordPlatformRevenue(state, { id: "sc_g02", sourceId: "content_g02", type: "SC", grossJpy: "18000", date: "2026-09-14" });
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.cash.receivable, "12600");
   assert.equal(state.finance.scCreatorEarned, "12600");
   assert.equal(state.history.receivables[0].dueDate, "2026-10-12");
@@ -360,6 +361,6 @@ test("refund settlement rejects an inconsistent save before any balance can beco
   const result = payRefundPayable(state, { amountJpy: "600", date: "2026-09-14" });
   assert.equal(result.ok, false);
   assert.equal(result.code, "INVALID_FINANCIAL_BASIS");
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.cash.payable, "600");
 });

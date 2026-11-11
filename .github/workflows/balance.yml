@@ -1,0 +1,95 @@
+name: Balance validation
+
+# 完整 D9 平衡回放（默认 100 种子 × 3 路线 × 6 策略）。不参与部署链路：
+# Pages 部署只跟随 main 上 push 触发的 CI。报告以 artifact 形式上传，需要时再提交进仓库。
+# 推送到 balance/** 临时分支即自动运行（手动触发要求工作流已在默认分支上）；合入 main 后也可在 Actions 页面手动运行。
+on:
+  push:
+    branches: ["balance/**"]
+  workflow_dispatch:
+    inputs:
+      seeds:
+        description: 确定性种子数量
+        required: true
+        default: "100"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: balance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shard:
+    name: Shard ${{ matrix.shard }}/12
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - name: Run trajectories
+        env:
+          SEEDS: ${{ inputs.seeds || '100' }}
+          SHARD: ${{ matrix.shard }}
+        run: node scripts/run-balance.mjs --seeds="$SEEDS" --shard="$SHARD/12" --raw-out="shards/shard-$SHARD.json" --workers=4
+
+      - name: Upload shard results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: balance-shard-${{ matrix.shard }}
+          path: shards/shard-${{ matrix.shard }}.json
+          retention-days: 3
+
+  report:
+    name: Merge and judge
+    needs: shard
+    # 某一分片轨迹失败时仍合并已有结果，由报告的完整性判定给出未通过。
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - name: Download shard results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: balance-shard-*
+          path: shards
+          merge-multiple: true
+
+      - name: Build report and check criteria
+        env:
+          SEEDS: ${{ inputs.seeds || '100' }}
+        run: node scripts/run-balance.mjs --seeds="$SEEDS" --merge=shards --strict
+
+      - name: Upload balance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d9-balance-report
+          path: |
+            output/validation/d9-balance-report.json
+            output/validation/d9-balance-report.md
+          retention-days: 30
+
+      - name: Publish summary
+        if: always()
+        run: test -f output/validation/d9-balance-report.md && cat output/validation/d9-balance-report.md >> "$GITHUB_STEP_SUMMARY" || true

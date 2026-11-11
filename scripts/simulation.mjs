@@ -14,13 +14,15 @@ import { validateGameState } from "../src/storage.js";
 import { continueAfterRetrospective, isCareerReviewWeek } from "../src/domain/career.js";
 
 export const ROUTE_IDS = Object.freeze(["indie", "homolive", "niji2434"]);
-export const STRATEGY_IDS = Object.freeze(["conservative", "trend", "music", "merch"]);
+export const STRATEGY_IDS = Object.freeze(["conservative", "trend", "music", "merch", "sprint", "overwork"]);
 
 export const STRATEGY_LABELS = Object.freeze({
   conservative: "保守经营",
   trend: "追热点",
   music: "音乐专精",
   merch: "商品经营",
+  sprint: "冲刺轮换",
+  overwork: "极限排满",
 });
 
 const BALANCED_ABILITIES = Object.freeze({ expression: 50, specialty: 50, performance: 50, production: 50, planning: 50, collaboration: 50 });
@@ -33,7 +35,16 @@ const BASE_ACTIONS = Object.freeze({
   trend: ["PREPARE_CONTENT", "MAKE_SHORT", "MAKE_SHORT", "LIVE_CHAT", "MAKE_SHORT", "EDIT_VIDEO", "LIVE_GAME", "MAKE_SHORT", "REVIEW", "MAKE_SHORT"],
   music: ["PREPARE_CONTENT", "LIVE_MUSIC", "PRACTICE", "PREPARE_CONTENT", "LIVE_MUSIC", "PRACTICE", "EDIT_VIDEO", "LIVE_MUSIC", "REVIEW", "LIVE_MUSIC"],
   merch: ["PREPARE_CONTENT", "LIVE_CHAT", "MAKE_SHORT", "EDIT_VIDEO", "LIVE_GAME", "REVIEW", "BUSINESS_ADMIN"],
+  // 冲刺轮换：疲劳低于阈值时排满内容，达到阈值后排一周轻量恢复。用于验证“冲刺还是休整”是否形成真实取舍。
+  sprint: ["PREPARE_CONTENT", "LIVE_GAME", "LIVE_CHAT", "MAKE_SHORT", "LIVE_GAME", "EDIT_VIDEO", "LIVE_CHAT", "MAKE_SHORT", "REVIEW", "LIVE_GAME"],
+  overwork: ["PREPARE_CONTENT", "LIVE_GAME", "LIVE_CHAT", "MAKE_SHORT", "LIVE_GAME", "EDIT_VIDEO", "LIVE_CHAT", "MAKE_SHORT", "REVIEW", "LIVE_GAME"],
 });
+
+// 极限排满：普通格与冲刺相同，另占用两个可转换生活格，用于验证长期满负荷会出现不可持续结果。
+const OVERWORK_FLEX_SLOTS = Object.freeze([5, 9]);
+const OVERWORK_FLEX_ACTIONS = Object.freeze(["LIVE_CHAT", "MAKE_SHORT"]);
+const SPRINT_RECOVERY_ACTIONS = Object.freeze(["PREPARE_CONTENT", "LIVE_GAME", "REVIEW", "LIVE_CHAT"]);
+const SPRINT_FATIGUE_THRESHOLD = 50;
 
 function unwrap(result, operation) {
   if (!result?.ok) throw new Error(`${operation}: ${result?.code || "UNKNOWN"} ${result?.message || ""}`.trim());
@@ -76,7 +87,13 @@ function planWeek(state, strategyId) {
   }
 
   if (BigInt(state.cash.free) < 120_000n) placePartTime(plan, state.weekIndex);
-  for (const actionId of BASE_ACTIONS[strategyId]) placeSingle(plan, actionId);
+  const actions = strategyId === "sprint" && state.performer.fatigue >= SPRINT_FATIGUE_THRESHOLD ? SPRINT_RECOVERY_ACTIONS : BASE_ACTIONS[strategyId];
+  for (const actionId of actions) placeSingle(plan, actionId);
+  if (strategyId === "overwork") {
+    OVERWORK_FLEX_SLOTS.forEach((slotIndex, index) => {
+      if (plan[slotIndex].flexibleLife && !plan[slotIndex].locked) Object.assign(plan[slotIndex], { actionId: OVERWORK_FLEX_ACTIONS[index], pairId: null, targetId: null, targetType: null, flexibleLife: false });
+    });
+  }
   const validation = validatePlan(plan);
   if (!validation.ok) throw new Error(`strategy plan invalid: ${validation.code} ${validation.message}`);
   return plan;
@@ -205,7 +222,7 @@ function objectiveScores(state) {
   };
 }
 
-export async function runTrajectory({ routeId, strategyId, seed, weeks = 104, careerModeId = "standard", validateEveryWeek = false, returnState = false } = {}) {
+export async function runTrajectory({ routeId, strategyId, seed, weeks = 104, careerModeId = "standard", validateEveryWeek = false, returnState = false, balanceRulesetId } = {}) {
   if (!ROUTE_IDS.includes(routeId)) throw new Error(`unknown route: ${routeId}`);
   if (!STRATEGY_IDS.includes(strategyId)) throw new Error(`unknown strategy: ${strategyId}`);
   let state = createGame({
@@ -219,6 +236,7 @@ export async function runTrajectory({ routeId, strategyId, seed, weeks = 104, ca
     careerModeId,
     seed,
     abilities: BALANCED_ABILITIES,
+    balanceRulesetId,
   });
   const checkpoints = {};
   let zeroCashWeeks = 0;

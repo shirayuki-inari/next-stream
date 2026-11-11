@@ -9,11 +9,15 @@ import {
   SKILLS,
   SKILL_LABELS,
   createGame,
+  forecastPlan,
   isoAddDays,
   migrateGame,
   previewWeek,
+  slotLoad,
   weekDateRange,
+  weeklyExpenses,
 } from "./domain/engine.js";
+import { balanceOf } from "../rules/balance_profiles.js";
 import { adsEligibility, fanFundingEligibility } from "./domain/finance.js";
 import { sponsorCandidateMetrics } from "./domain/sponsorship.js";
 import { auditionEligibility, auditionScore, isAuditionTerminal } from "./domain/audition.js";
@@ -419,21 +423,43 @@ function scheduleView() {
     <div class="page-heading compact-heading"><div><p class="eyebrow">第 ${game.weekIndex} 周 · 14 个时间格</p><h1>本周排期</h1><p>点击时间格选择活动。未安排的格子在结算时记为休息。</p></div><div class="heading-actions schedule-actions"><button class="secondary-action" data-repeat-plan ${game.phase !== "PLANNING" || !game.previousPlan ? "disabled" : ""} ${game.previousPlan ? "" : `title="完成第一周后可用"`}>沿用上周排期</button><button class="secondary-action" data-auto-plan ${game.phase !== "PLANNING" ? "disabled" : ""}>填入稳健示例</button><button class="primary-action" data-settle ${ui.busy || !["PLANNING", "READY_TO_COMMIT"].includes(game.phase) ? "disabled" : ""}>${ui.busy ? "正在结算…" : game.phase === "READY_TO_COMMIT" ? "提交周结算 →" : game.phase === "REPORT" ? "已结算" : "推进本周 →"}</button></div></div>
     ${pendingEventStrip()}
     <div class="schedule-summary" data-risk="${preview.risk}">
-      <div><span>工作格</span><b>${preview.workSlots}<small> / 12</small></b></div><div><span>直播</span><b>${preview.liveCount}<small> 场</small></b></div><div><span>预计疲劳</span><b>${preview.projectedFatigue}<small> / 100</small></b></div><div><span>预计压力</span><b>${preview.projectedStress}<small> / 100</small></b></div>
-      <p>${preview.risk === "low" ? "当前计划保留了恢复空间。" : preview.risk === "medium" ? "当前负荷偏高，建议检查休息格。" : "当前负荷可能不可持续，建议减量。"}</p>
+      <div><span>工作格</span><b>${preview.workSlots}<small> / 12</small></b></div><div><span>直播</span><b>${preview.liveCount}<small> 场</small></b></div><div><span>预计疲劳</span><b>${preview.projectedFatigue}<small> 峰值 ${preview.peakFatigue}</small></b></div><div><span>预计压力</span><b>${preview.projectedStress}<small> / 100</small></b></div>
+      <p>${preview.overloadSlots ? `疲劳超过 ${balanceOf(game).overload.fatigueThreshold} 后，有 ${preview.overloadSlots} 个格子可能因身体不适取消（预计约 ${preview.expectedCancellations.toFixed(1)} 格）。已约定的联动、商单与福利不会取消。` : preview.risk === "low" ? "当前计划保留了恢复空间。疲劳越高恢复越快，但超过 40 会开始影响内容质量。" : preview.risk === "medium" ? "当前负荷偏高，疲劳超过 40 会降低内容质量，建议检查休息格。" : "当前负荷可能不可持续，建议减量。"}</p>
     </div>
     <div class="schedule-board" aria-label="每周十四格排期">
-      ${DAY_NAMES.map((day, dayIndex) => `<section class="day-column ${dayIndex >= 5 ? "weekend" : ""}"><header><span>${day}</span><small>${dateLabel(isoAddDays(weekDateRange(game.weekIndex).start, dayIndex)).slice(5)}</small></header>${[0, 1].map((period) => slotCard(dayIndex * 2 + period)).join("")}</section>`).join("")}
+      ${DAY_NAMES.map((day, dayIndex) => `<section class="day-column ${dayIndex >= 5 ? "weekend" : ""}"><header><span>${day}</span><small>${dateLabel(isoAddDays(weekDateRange(game.weekIndex).start, dayIndex)).slice(5)}</small></header>${[0, 1].map((period) => slotCard(dayIndex * 2 + period, game.phase === "PLANNING" ? preview.slots[dayIndex * 2 + period] : null)).join("")}</section>`).join("")}
     </div>
     <div class="schedule-legend"><span><i class="legend-dot life"></i>生活保留</span><span><i class="legend-dot content"></i>内容活动</span><span><i class="legend-dot growth"></i>成长／经营</span><span>未安排的格子记为休息</span></div>
     <details class="fold-panel">
-      <summary><span><b>保守／基准／乐观预测</b><small>按三种情形估算的区间</small></span><i>展开</i></summary>
-      <div class="fold-content forecast-grid"><div><span>新增订阅</span><b>${preview.subscriberRange[0]}—${preview.subscriberRange[1]}</b><small>曝光先转为观看，再判定订阅</small></div><div><span>工作负荷</span><b>${preview.workSlots} 格</b><small>上限 12，锁定生活格不可覆盖</small></div><div><span>现金固定支出</span><b>${money(15000n + ROUTES[game.routeId].weeklyToolCost)}</b><small>生活费于周末结算</small></div></div>
+      <summary><span><b>本周预测区间</b><small>按内容质量随机波动的上下界估算</small></span><i>展开</i></summary>
+      <div class="fold-content forecast-grid"><div><span>新增订阅</span><b>${spanLabel(preview.subscriberRange)}</b><small>曝光先转为观看，再判定订阅；未计入事件与过载取消</small></div><div><span>工作负荷</span><b>${preview.workSlots} 格</b><small>上限 12，锁定生活格不可覆盖</small></div><div><span>现金固定支出</span><b>${money(weeklyExpenses(game).total)}</b><small>${weeklyExpenses(game).operations ? `含频道运营 ${money(weeklyExpenses(game).operations)}，随订阅增长` : "生活费于周末结算"}</small></div></div>
     </details>
   </section>`;
 }
 
-function slotCard(index) {
+function spanLabel(values, prefix = "") {
+  return values[0] === values[1] ? `${prefix}${values[0]}` : `${prefix}${values[0]}—${values[1]}`;
+}
+
+function slotForecastLine(forecast) {
+  if (!forecast) return "";
+  const risk = forecast.overloadRisk > 0 ? `<span class="slot-risk">过载 ${Math.round(forecast.overloadRisk * 100)}%</span>` : "";
+  if (!forecast.quality) return risk ? `<span class="slot-forecast">${risk}</span>` : "";
+  return `<span class="slot-forecast">质量 ${spanLabel(forecast.quality.map(Math.round))} · 订阅 ${spanLabel(forecast.subscribers, "+")}${risk}</span>`;
+}
+
+function forecastFactors(forecast) {
+  const factors = forecast.factors;
+  return [
+    `相关能力 ${factors.related}`,
+    `准备 ${factors.preparation}`,
+    `方向匹配 ${factors.match}`,
+    factors.stateMultiplier < 1 ? `疲劳与状态 ×${factors.stateMultiplier}` : "",
+    factors.launch ? "出道曝光加成" : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function slotCard(index, forecast = null) {
   const slot = game.plan[index];
   const action = slot.actionId ? ACTIONS[slot.actionId] : null;
   const sponsorship = slot.targetId ? game.sponsorships.find((deal) => deal.id === slot.targetId) : null;
@@ -445,7 +471,7 @@ function slotCard(index) {
   if (isSecondPair) return `<div class="slot-card pair-tail tone-${action.tone}" aria-label="${TIME_NAMES[index % 2]} ${action.label}"><span class="slot-time">${TIME_NAMES[index % 2]}</span><b>↳ 继续 ${action.shortLabel}</b></div>`;
   return `<article class="slot-card ${action ? `filled tone-${action.tone}` : "empty"} ${slot.locked ? "locked" : ""} ${slot.flexibleLife ? "flexible-life" : ""}">
     <span class="slot-time">${TIME_NAMES[index % 2]}</span>
-    ${action ? `<div class="slot-copy"><b>${action.shortLabel}</b><small>${sponsorship ? `${escapeHtml(sponsorship.brandName)} · 待交付商单` : membershipPromise ? `会员福利包 · 截止 ${membershipPromise.dueDate}` : audition ? `${agencyDisplayLabel(audition.agencyId)} · ${AUDITION_STATUS_LABELS[audition.status] || audition.status}` : transfer ? `${routeDisplayLabel(transfer.targetRouteId)} · ${transfer.identityPreparation.completedUnits}/${transfer.identityPreparation.requiredUnits} 格` : targetProject?.type === "LONG_TERM" ? `${escapeHtml(targetProject.title)} · ${targetProject.workCompleted}/${targetProject.workRequired} 格` : targetProject ? `${escapeHtml(targetProject.title)} · ${targetProject.designWorkCompleted}/${targetProject.designWorkRequired} 格` : slot.locked ? "锁定生活时间" : slot.flexibleLife ? "可确认后转为工作" : action.slots === 2 ? "占用同日两格" : action.label}</small></div>` : `<div class="slot-copy"><b>未安排</b><small>结算时自动休息</small></div>`}
+    ${action ? `<div class="slot-copy"><b>${action.shortLabel}</b>${slotForecastLine(forecast)}<small>${sponsorship ? `${escapeHtml(sponsorship.brandName)} · 待交付商单` : membershipPromise ? `会员福利包 · 截止 ${membershipPromise.dueDate}` : audition ? `${agencyDisplayLabel(audition.agencyId)} · ${AUDITION_STATUS_LABELS[audition.status] || audition.status}` : transfer ? `${routeDisplayLabel(transfer.targetRouteId)} · ${transfer.identityPreparation.completedUnits}/${transfer.identityPreparation.requiredUnits} 格` : targetProject?.type === "LONG_TERM" ? `${escapeHtml(targetProject.title)} · ${targetProject.workCompleted}/${targetProject.workRequired} 格` : targetProject ? `${escapeHtml(targetProject.title)} · ${targetProject.designWorkCompleted}/${targetProject.designWorkRequired} 格` : slot.locked ? "锁定生活时间" : slot.flexibleLife ? "可确认后转为工作" : action.slots === 2 ? "占用同日两格" : action.label}</small></div>` : `<div class="slot-copy"><b>未安排</b><small>结算时自动休息</small></div>`}
     ${slot.locked || isSecondPair ? "" : `<div class="slot-actions"><button data-pick-slot="${index}" aria-label="${action ? `更改${action.label}` : `安排${DAY_NAMES[Math.floor(index / 2)]}${TIME_NAMES[index % 2]}`}" ${game.phase !== "PLANNING" ? `disabled title="${game.phase === "CAREER_ENDED" ? "生涯已归档，排期只读" : "当前周已进入结算或周报阶段，排期只读"}"` : ""}>${action ? "更改" : "+ 安排"}</button>${action && !slot.flexibleLife ? `<button data-remove-slot="${index}" aria-label="移除${action.label}" ${game.phase !== "PLANNING" ? "disabled" : ""}>×</button>` : ""}</div>`}
   </article>`;
 }
@@ -850,6 +876,21 @@ function activityDialog() {
   const longWorkProjects = game.projects.filter((project) => project.type === "LONG_TERM" && project.status === "PRODUCTION" && project.workCompleted < project.workRequired);
   const interviewApplications = game.auditionApplications.filter((application) => ["INTERVIEW_1", "INTERVIEW_2"].includes(application.status));
   const identityTransfers = game.transferCases.filter((transfer) => transfer.status === "ASSET_AND_OBLIGATION_PLAN" && transfer.identityPreparation?.funded && transfer.identityPreparation.completedUnits < transfer.identityPreparation.requiredUnits);
+  const candidateForecast = (actionId) => {
+    const pairId = slot.pairId;
+    const plan = game.plan.map((item) => (item.index === ui.selectedSlot ? { ...item, actionId, targetId: null, targetType: null, pairId: null } : pairId && item.pairId === pairId ? { ...item, actionId: null, targetId: null, targetType: null, pairId: null } : item));
+    return forecastPlan({ ...game, plan }).slots[ui.selectedSlot];
+  };
+  const profile = balanceOf(game);
+  const actionNote = (id, action) => {
+    if (action.unavailable) return action.unavailable;
+    if (["live", "video"].includes(action.kind)) {
+      const forecast = candidateForecast(id);
+      return `质量 ${spanLabel(forecast.quality.map(Math.round))} · 订阅 ${spanLabel(forecast.subscribers, "+")} · 疲劳 ${signed(action.fatigue)}${forecast.overloadRisk ? ` · 过载 ${Math.round(forecast.overloadRisk * 100)}%` : ""}<br>${forecastFactors(forecast)}`;
+    }
+    const load = slotLoad(profile, id, game.performer);
+    return `${action.slots} 格 · 疲劳 ${signed(load.fatigue)} · 压力 ${signed(load.stress)}${action.income ? ` · 到账 ${money(action.income)}` : ""}${id === "PREPARE_CONTENT" ? " · 下一条内容准备 +20" : ""}${id === "REST" && profile.recovery.model === "PROPORTIONAL" ? " · 越累恢复越多" : ""}`;
+  };
   const groups = [
     ["内容", ["LIVE_GAME", "LIVE_CHAT", "LIVE_MUSIC", "MAKE_SHORT", "EDIT_VIDEO"]],
     ["准备与成长", ["PREPARE_CONTENT", "PRACTICE", "REVIEW", "NETWORK"]],
@@ -863,13 +904,22 @@ function activityDialog() {
   const projectSection = designProjects.length ? `<section class="sponsor-pick project-pick"><h3>商品制作 · 项目工作</h3><div>${designProjects.map((project) => { const nextStep = project.salesMode === "DIGITAL" ? "完成后可直接开售" : project.salesMode === "READY_STOCK" ? "完成后进入备货等待" : "完成后仍需等待打样"; return `<button data-choose-action="PROJECT_WORK" data-target-id="${escapeHtml(project.id)}" data-target-type="MERCH_PROJECT"><i class="action-swatch tone-cyan"></i><span><b>${escapeHtml(project.title)}</b><small>1 格 · 设计 ${project.designWorkCompleted}/${project.designWorkRequired} · ${nextStep}</small></span><em>→</em></button>`; }).join("")}</div></section>` : "";
   const longProjectSection = longWorkProjects.length ? `<section class="sponsor-pick project-pick"><h3>长期作品 · 项目工作</h3><div>${longWorkProjects.map((project) => `<button data-choose-action="PROJECT_WORK" data-target-id="${escapeHtml(project.id)}" data-target-type="LONG_TERM_PROJECT"><i class="action-swatch tone-cyan"></i><span><b>${escapeHtml(project.title)}</b><small>1 格 · 工作 ${project.workCompleted}/${project.workRequired} · 最早 ${project.earliestPublishDate}</small></span><em>→</em></button>`).join("")}</div></section>` : "";
   const sponsorSection = acceptedSponsors.length ? `<section class="sponsor-pick"><h3>待交付商单</h3><div>${acceptedSponsors.map((deal) => `<button data-choose-action="EDIT_VIDEO" data-target-id="${escapeHtml(deal.id)}" data-target-type="SPONSOR"><i class="action-swatch tone-violet"></i><span><b>${escapeHtml(deal.brandName)} 商单内容</b><small>1 格 · ${deal.dueDate} 前交付 · 已签合同</small></span><em>→</em></button>`).join("")}</div></section>` : "";
-  return `<div class="dialog-backdrop" data-close-dialog><section class="activity-drawer" role="dialog" aria-modal="true" aria-labelledby="activity-title" tabindex="-1" data-dialog-panel><header><div><span>${day} · ${TIME_NAMES[ui.selectedSlot % 2]}</span><h2 id="activity-title">安排一个活动</h2></div><button data-close-dialog aria-label="关闭">×</button></header>${slot.actionId && !slot.locked && !slot.flexibleLife ? `<div class="drawer-current"><span>当前安排<b>${ACTIONS[slot.actionId].label}</b></span><button class="secondary-action" data-remove-slot="${ui.selectedSlot}">清空此格</button></div>` : ""}<div class="activity-groups">${collaborationSection}${transferSection}${auditionSection}${promiseSection}${longProjectSection}${projectSection}${sponsorSection}${groups.map(([name, ids]) => `<section><h3>${name}</h3><div>${ids.map((id) => { const action = ACTIONS[id]; return `<button data-choose-action="${id}" ${action.unavailable ? "disabled" : ""}><i class="action-swatch tone-${action.tone}"></i><span><b>${action.label}</b><small>${action.unavailable || `${action.slots} 格 · 疲劳 ${signed(action.fatigue)} · 压力 ${signed(action.stress)}${action.income ? ` · 到账 ${money(action.income)}` : ""}`}</small></span><em>→</em></button>`; }).join("")}</div></section>`).join("")}</div>${slot.flexibleLife ? `<footer><span>此格原为生活保留时间。</span><label><input type="checkbox" data-confirm-life /> 我确认把这一格转为工作</label></footer>` : ""}</section></div>`;
+  return `<div class="dialog-backdrop" data-close-dialog><section class="activity-drawer" role="dialog" aria-modal="true" aria-labelledby="activity-title" tabindex="-1" data-dialog-panel><header><div><span>${day} · ${TIME_NAMES[ui.selectedSlot % 2]}</span><h2 id="activity-title">安排一个活动</h2></div><button data-close-dialog aria-label="关闭">×</button></header>${slot.actionId && !slot.locked && !slot.flexibleLife ? `<div class="drawer-current"><span>当前安排<b>${ACTIONS[slot.actionId].label}</b></span><button class="secondary-action" data-remove-slot="${ui.selectedSlot}">清空此格</button></div>` : ""}<div class="activity-groups">${collaborationSection}${transferSection}${auditionSection}${promiseSection}${longProjectSection}${projectSection}${sponsorSection}${groups.map(([name, ids]) => `<section><h3>${name}</h3><div>${ids.map((id) => { const action = ACTIONS[id]; return `<button data-choose-action="${id}" ${action.unavailable ? "disabled" : ""}><i class="action-swatch tone-${action.tone}"></i><span><b>${action.label}</b><small>${actionNote(id, action)}</small></span><em>→</em></button>`; }).join("")}</div></section>`).join("")}</div>${slot.flexibleLife ? `<footer><span>此格原为生活保留时间。</span><label><input type="checkbox" data-confirm-life /> 我确认把这一格转为工作</label></footer>` : ""}</section></div>`;
+}
+
+function reportNotices(report) {
+  const notices = [];
+  if (report.cancelledSlots?.length) notices.push(`疲劳过高，${report.cancelledSlots.length} 个格子因身体不适临时取消：${report.cancelledSlots.map((item) => `${slotLabel(item.slotIndex)} ${ACTIONS[item.actionId].shortLabel}`).join("、")}。下周留出休息格可避免。`);
+  if (report.cashShortfallJpy) notices.push(`自由现金不足以支付本周固定支出，缺口 ${money(report.cashShortfallJpy)} 靠压缩生活撑过，压力上升、动力下降。可以安排兼职或减少开支。`);
+  if (report.expenses && BigInt(report.expenses.channelOperationsJpy) > 0n) notices.push(`本周频道运营支出 ${money(report.expenses.channelOperationsJpy)}，随订阅规模增长。`);
+  return notices.length ? `<ul class="report-notices">${notices.map((item) => `<li>${item}</li>`).join("")}</ul>` : "";
 }
 
 function reportSummary(report, includeDetails = true) {
   const commerce = report.commerce || { scGrossJpy: "0", scCreatorEarnedJpy: "0", membershipGrossJpy: "0", membershipCreatorEarnedJpy: "0", membersJoined: 0, membershipPromisesFulfilled: 0, adsChannelNetJpy: "0", adsCreatorEarnedJpy: "0", sponsorGrossJpy: "0", sponsorCreatorEarnedJpy: "0" };
   return `<div class="report-summary">
     <div class="report-numbers"><div><span>订阅变化</span><b>${signed(report.subscriberDelta)}</b></div><div><span>独立观众</span><b>约 ${compact(report.weeklyUniqueEstimate)}</b></div><div><span>平均同接</span><b>${report.averageConcurrent == null ? "—" : compact(report.averageConcurrent)}</b></div><div><span>现金变化</span><b>${signed(report.cashChange)} 日元</b></div></div>
+    ${reportNotices(report)}
     ${includeDetails ? `<details><summary>查看内容计算依据</summary><div class="result-list">${report.contents.length ? report.contents.map((content) => `<article><div><b>${ACTIONS[content.actionId].label}${content.sponsorship ? " · 商单交付" : ""}</b><span>${content.publishedAt}</span></div><div><span>质量 <b>${content.quality}</b></span><span>独立观众 <b>约 ${compact(content.uniqueEstimate)}</b></span><span>订阅 <b>${signed(content.subscriberDelta)}</b></span></div><p>${content.reasons.join(" · ")}</p></article>`).join("") : `<p>本周没有直播或视频；平均同接显示为“—”。</p>`}</div></details>
     <details><summary>查看本周收入明细</summary><div class="commerce-report"><div><span>SC 付款发生额</span><b>${money(commerce.scGrossJpy)}</b></div><div><span>SC 主播归属</span><b>${money(commerce.scCreatorEarnedJpy)}</b></div><div><span>会员付款发生额</span><b>${money(commerce.membershipGrossJpy)}</b></div><div><span>新增会员</span><b>${commerce.membersJoined} 人</b></div><div><span>兑现福利周期</span><b>${commerce.membershipPromisesFulfilled || 0} 项</b></div><div><span>平台后广告</span><b>${money(commerce.adsChannelNetJpy || 0)}</b></div><div><span>广告主播归属</span><b>${money(commerce.adsCreatorEarnedJpy || 0)}</b></div><div><span>商单合同总额</span><b>${money(commerce.sponsorGrossJpy || 0)}</b></div><div><span>商单主播归属</span><b>${money(commerce.sponsorCreatorEarnedJpy || 0)}</b></div><p>主播应得收入先计入应收，到账后才计入自由现金。本周旧应收到款 ${money(report.dueReceiptsJpy || 0)}。个人商单预付款在交付前仍属于负债。</p></div></details>` : ""}
   </div>`;

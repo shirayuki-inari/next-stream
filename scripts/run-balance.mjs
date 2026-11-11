@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -19,6 +19,19 @@ const seedCount = Number(option("seeds", "100"));
 const requestedWorkers = Number(option("workers", String(Math.min(8, os.availableParallelism?.() || os.cpus().length || 4))));
 if (!Number.isInteger(seedCount) || seedCount < 1) throw new Error("--seeds must be a positive integer");
 if (!Number.isInteger(requestedWorkers) || requestedWorkers < 1) throw new Error("--workers must be a positive integer");
+// 分片运行：--shard=i/n 只运行第 i 片（1 起），配合 --raw-out 写出原始结果；--merge=目录 读取全部分片后生成同一份报告。
+const shardOption = option("shard", null);
+const rawOutPath = option("raw-out", null);
+const mergeDirectory = option("merge", null);
+const strict = process.argv.includes("--strict");
+let shard = null;
+if (shardOption) {
+  const match = /^(\d+)\/(\d+)$/.exec(shardOption);
+  if (!match || Number(match[1]) < 1 || Number(match[1]) > Number(match[2])) throw new Error("--shard must look like i/n with 1 <= i <= n");
+  shard = { index: Number(match[1]), count: Number(match[2]) };
+}
+if (shard && !rawOutPath) throw new Error("--shard requires --raw-out so the partial batch is not reported as complete");
+if (mergeDirectory && (shard || rawOutPath)) throw new Error("--merge cannot be combined with --shard or --raw-out");
 
 const jobs = [];
 for (let seedIndex = 1; seedIndex <= seedCount; seedIndex += 1) {
@@ -119,7 +132,7 @@ function reportMarkdown(report) {
   return `${lines.join("\n")}\n`;
 }
 
-async function runJobs() {
+async function runJobs(jobs) {
   const results = [];
   const failures = [];
   let nextIndex = 0;
@@ -163,7 +176,36 @@ async function runJobs() {
   return { results, failures, elapsedMs: Date.now() - startedAt };
 }
 
-const batch = await runJobs();
+async function mergeShards(directory) {
+  const files = (await readdir(directory)).filter((name) => name.endsWith(".json")).sort();
+  if (!files.length) throw new Error(`no shard files in ${directory}`);
+  const merged = { results: [], failures: [], elapsedMs: 0 };
+  for (const name of files) {
+    const part = JSON.parse(await readFile(path.join(directory, name), "utf8"));
+    if (part.seedCount !== seedCount) throw new Error(`${name} was run with --seeds=${part.seedCount}, expected ${seedCount}`);
+    merged.results.push(...part.results);
+    merged.failures.push(...part.failures);
+    merged.elapsedMs = Math.max(merged.elapsedMs, part.elapsedMs);
+  }
+  const ids = new Set(merged.results.map((item) => `${item.routeId}/${item.strategyId}/${item.seed}`));
+  if (ids.size !== merged.results.length) throw new Error("shards overlap: duplicate trajectories");
+  const covered = merged.results.length + merged.failures.length;
+  if (covered !== jobs.length) throw new Error(`shards cover ${covered}/${jobs.length} trajectories; a shard is missing or used a different --seeds`);
+  process.stdout.write(`merged ${files.length} shards: ${merged.results.length} results, ${merged.failures.length} failures\n`);
+  return merged;
+}
+
+if (shard) {
+  const selected = jobs.filter((job) => (job.jobId - 1) % shard.count === shard.index - 1);
+  const partial = await runJobs(selected);
+  await mkdir(path.dirname(path.resolve(rawOutPath)), { recursive: true });
+  await writeFile(rawOutPath, `${JSON.stringify({ seedCount, shard, ...partial })}\n`, "utf8");
+  process.stdout.write(`wrote shard ${shard.index}/${shard.count} (${partial.results.length} results) to ${rawOutPath}\n`);
+  if (partial.failures.length) process.exitCode = 1;
+  process.exit();
+}
+
+const batch = mergeDirectory ? await mergeShards(mergeDirectory) : await runJobs(jobs);
 const groups = {};
 for (const routeId of ROUTE_IDS) {
   for (const strategyId of STRATEGY_IDS) {
@@ -222,4 +264,6 @@ await mkdir(outputDirectory, { recursive: true });
 await writeFile(path.join(outputDirectory, "d9-balance-report.json"), `${JSON.stringify(report, null, 2)}\n`, "utf8");
 await writeFile(path.join(outputDirectory, "d9-balance-report.md"), reportMarkdown(report), "utf8");
 process.stdout.write(`wrote output/validation/d9-balance-report.json and .md in ${(batch.elapsedMs / 60_000).toFixed(1)} min\n`);
-if (batch.failures.length) process.exitCode = 1;
+const failedCriteria = Object.entries(report.criteria).filter(([, item]) => !item.pass).map(([key]) => key);
+if (failedCriteria.length) process.stdout.write(`criteria not met: ${failedCriteria.join(", ")}\n`);
+if (batch.failures.length || (strict && failedCriteria.length)) process.exitCode = 1;

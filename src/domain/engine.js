@@ -1,5 +1,10 @@
 import { ACTIONS } from "../../rules/actions.js";
-import { BALANCE, RULESET_IDS } from "../../rules/balance_standard_0_1.js";
+import { BALANCE } from "../../rules/balance_standard_0_1.js";
+import { RULESET_IDS } from "../../rules/balance_standard_0_2.js";
+import { balanceOf, BALANCE_PROFILES } from "../../rules/balance_profiles.js";
+import { weeklyExpenses } from "./costs.js";
+
+export { weeklyExpenses };
 import { ROUTES } from "../../rules/agency_profiles.js";
 import { deterministicRandom } from "./random.js";
 import {
@@ -107,6 +112,9 @@ export function createGame(input) {
   if (!validateAbilities(input.abilities)) throw new Error("六项能力总和必须为 300，且每项为 20—70");
   const seed = String(input.seed || "next-stream-001").slice(0, 64);
   const route = ROUTES[input.routeId];
+  // 新游戏绑定当前平衡包；显式传入的旧包 ID 只用于回放与兼容性验证。
+  const balanceId = input.balanceRulesetId && BALANCE_PROFILES[input.balanceRulesetId] ? input.balanceRulesetId : RULESET_IDS.balance;
+  const openingCash = BALANCE_PROFILES[balanceId].initialState.cashFreeJpy;
   const performerId = stableId("performer", seed);
   const characterId = stableId("character", seed);
   const channelId = stableId("channel", seed);
@@ -117,7 +125,7 @@ export function createGame(input) {
   const state = {
     id: stableId("game", seed),
     schemaVersion: 1,
-    rulesets: { ...RULESET_IDS, careerModes: CAREER_MODES.id },
+    rulesets: { ...RULESET_IDS, balance: balanceId, careerModes: CAREER_MODES.id },
     careerMode: resolveCareerModeId(input.careerModeId),
     seed,
     snapshotVersion: 1,
@@ -165,7 +173,7 @@ export function createGame(input) {
     licenses: [{ assetId: stableId("asset", seed, "avatar"), licenseeParty: "PLAYER", allowedUses: ["STREAM", "VIDEO"], effectiveFrom: BALANCE.calendar.startDate, effectiveTo: null, survivesTermination: route.id === "indie" }],
     audienceSegments: createAudienceSegments(),
     audienceBudgets: [],
-    cash: { free: "600000", restricted: "0", receivable: "0", payable: "0" },
+    cash: { free: openingCash, restricted: "0", receivable: "0", payable: "0" },
     liabilities: { deferredCustomerFunds: "0", refundPayable: "0" },
     finance: { scGrossLifetime: "0", scRefundsLifetime: "0", scChannelNet: "0", scCreatorEarned: "0", scCreatorReceived: "0", membershipGrossLifetime: "0", membershipChannelNet: "0", membershipCreatorEarned: "0", membershipCreatorReceived: "0", adsChannelNet: "0", adsCreatorEarned: "0", adsCreatorReceived: "0", sponsorGross: "0", sponsorCreatorEarned: "0", sponsorCreatorReceived: "0", merchOrderGmv: "0", merchFulfilledRevenue: "0", projectProfit: "0", royaltyCreatorEarned: "0", royaltyCreatorReceived: "0" },
     membershipProgram: { promisePolicy: "STANDARD", chargesPaused: false, recentFulfillment: 1 },
@@ -217,8 +225,8 @@ export function createGame(input) {
         date: BALANCE.calendar.startDate,
         sourceId: "opening_balance",
         lines: [
-          { account: "CASH_FREE", debit: "600000", credit: "0" },
-          { account: "OPENING_EQUITY", debit: "0", credit: "600000" },
+          { account: "CASH_FREE", debit: openingCash, credit: "0" },
+          { account: "OPENING_EQUITY", debit: "0", credit: openingCash },
         ],
       }],
     },
@@ -491,6 +499,103 @@ export function calculateQuality({ related, preparation, match, production, fati
   return { base, stateMultiplier, quality: clamp(base * stateMultiplier * noise + choiceDelta, 0, 100) };
 }
 
+// 内容质量的确定性输入（不含随机波动），结算与排期预测共用。
+export function contentQualityInputs(state, actionId, preparationBank, performer = state.performer) {
+  const preparation = 40 + Math.min(40, preparationBank * 20);
+  return {
+    related: relatedAbility(performer.abilities, actionId),
+    preparation,
+    match: activityMatchValue(state, actionId),
+    production: 50 + (["LIVE_MUSIC", "MAKE_SHORT", "EDIT_VIDEO"].includes(actionId) ? Math.min(20, Number(state.character.visualProductionBonus || 0)) : 0),
+    fatigue: performer.fatigue,
+    stress: performer.stress,
+    physicalCondition: performer.physicalCondition,
+  };
+}
+
+// 单个观众分群对一条内容的反应。只读 segment，不修改状态；结算与排期预测共用。
+export function segmentOutcome({ state, segment, actionId, quality, worldWeek, hasDebuted, collabExposure = 1, propagationBoost = 0 }) {
+  const action = ACTIONS[actionId];
+  const route = ROUTES[state.routeId];
+  const match = matchScore(state, actionId, segment);
+  const avgPopulation = BALANCE.audience.totalMarket / 24;
+  const pool = BALANCE.audience.baseImpressionPoolPerSegmentSlot * segment.marketPopulation / avgPopulation;
+  const playerWeight = (1 + Math.log(1 + compactActiveEstimate([segment])) / 3) * (0.5 + quality / 100) * match;
+  const marketSupplyFactor = 0.75 + Number(worldWeek?.supplyResources || 50) / 200;
+  let impressions = Math.floor(pool * playerWeight / (playerWeight + BALANCE.audience.backgroundRecommendationWeight * marketSupplyFactor) * collabExposure);
+  impressions += Math.floor(propagationBoost * segment.marketPopulation / BALANCE.audience.totalMarket);
+  if (!hasDebuted && action.kind === "live") impressions += Math.floor(route.launchImpressions * segment.marketPopulation / BALANCE.audience.totalMarket);
+  const packaging = clamp(45 + state.performer.abilities.planning * 0.35, 0, 100);
+  const ctr = clamp(0.025 + 0.05 * packaging / 100, 0.01, 0.1);
+  const clicks = Math.floor(impressions * ctr);
+  const newViewers = Math.floor(clicks * (1 - segment.knownViewers / segment.marketPopulation));
+  const recentActiveRatio = segment.knownViewers ? Math.min(1, compactActiveEstimate([segment]) / segment.knownViewers) : 0;
+  const returning = Math.floor(segment.knownViewers * 0.12 * match * 0.9 * (0.2 + 0.8 * recentActiveRatio) * (0.5 + segment.loyalty / 100));
+  const unique = Math.min(segment.marketPopulation, Math.round(unionEstimate(Math.max(segment.knownViewers, 1), Math.min(segment.knownViewers, returning), Math.min(segment.knownViewers, Math.floor(clicks * 0.2)))) + newViewers);
+  const streamMinutes = action.kind === "live" ? 120 : 12;
+  const watchRatio = clamp(0.12 + 0.5 * quality / 100 + 0.15 * match + 0.08 * segment.loyalty / 100, 0.05, 0.85);
+  const watchMinutes = Math.round(unique * streamMinutes * watchRatio);
+  const convertible = newViewers + returning * (1 - segment.subscribers / Math.max(segment.knownViewers, 1));
+  const pSub = clamp(0.01 + 0.06 * quality / 100 + 0.04 * match, 0.005, 0.15) * (action.kind === "video" ? 0.6 : 1);
+  const gainedSubs = Math.max(0, Math.min(Math.round(convertible * pSub), unique - Math.min(segment.subscribers, unique)));
+  return { match, newViewers, returning, unique, watchMinutes, gainedSubs };
+}
+
+// 内容结算后对分群的写入；结算与排期预测共用，保证两者按同一顺序推进观众状态。
+export function applySegmentOutcome(segment, outcome, quality, date) {
+  segment.knownViewers = Math.min(segment.marketPopulation, segment.knownViewers + outcome.newViewers);
+  segment.subscribers = Math.min(segment.knownViewers, segment.subscribers + outcome.gainedSubs);
+  segment.loyalty = clamp(segment.loyalty + clamp((quality - 55) / 10, -3, 3), 0, 100);
+  segment.dailyReachEstimates.push({ date, unique: outcome.unique });
+}
+
+// 一个活动格对疲劳、压力、动力的变化。0_2 起休息与生活保留按当前数值成比例恢复。
+export function slotLoad(profile, actionId, performer) {
+  const action = ACTIONS[actionId];
+  const recovery = profile.recovery;
+  if (recovery.model === "PROPORTIONAL" && (actionId === "REST" || actionId === "LIFE")) {
+    const rule = actionId === "REST" ? recovery.rest : recovery.life;
+    return {
+      fatigue: -Math.round(rule.fatigueBase + rule.fatigueRate * performer.fatigue),
+      stress: -Math.round(rule.stressBase + rule.stressRate * performer.stress),
+      motivation: action.motivation || 0,
+    };
+  }
+  return { fatigue: action.fatigue, stress: action.stress, motivation: action.motivation || 0 };
+}
+
+// 每日结束时的自然恢复量（正数表示减少）。
+export function dailyRecovery(profile, performer) {
+  const recovery = profile.recovery;
+  if (recovery.model === "PROPORTIONAL") {
+    return {
+      fatigue: Math.round(recovery.daily.fatigueBase + recovery.daily.fatigueRate * performer.fatigue),
+      stress: Math.round(recovery.daily.stressBase + recovery.daily.stressRate * performer.stress),
+    };
+  }
+  return { fatigue: recovery.daily.fatigue, stress: recovery.daily.stress };
+}
+
+function applyLoad(performer, load) {
+  performer.fatigue = clamp(performer.fatigue + load.fatigue, 0, 100);
+  performer.stress = clamp(performer.stress + load.stress, 0, 100);
+  performer.motivation = clamp(performer.motivation + load.motivation, 0, 100);
+}
+
+function applyDailyRecovery(profile, performer) {
+  const recovered = dailyRecovery(profile, performer);
+  performer.fatigue = clamp(performer.fatigue - recovered.fatigue, 0, 100);
+  performer.stress = clamp(performer.stress - recovered.stress, 0, 100);
+}
+
+// 过载停播风险：只对未绑定承诺的内容、成长与支援格生效；已约定的联动、商单、会员福利和面试照常执行。
+export function overloadRisk(profile, fatigue, actionId, planned = {}) {
+  const rule = profile.overload;
+  if (!rule || planned.targetId || fatigue < rule.fatigueThreshold) return 0;
+  if (!["live", "video", "growth", "support"].includes(ACTIONS[actionId]?.kind)) return 0;
+  return Math.min(rule.maximumRisk, rule.baseRisk + (fatigue - rule.fatigueThreshold) * rule.riskPerPoint);
+}
+
 export function unionEstimate(known, first, second) {
   if (known === 0) return 0;
   return Number((known * (1 - (1 - first / known) * (1 - second / known))).toFixed(6));
@@ -532,23 +637,117 @@ function activityMatchValue(state, actionId) {
   return 66;
 }
 
+// 按格预测：按结算顺序推进疲劳、准备度与观众分群的轻量副本，质量随机波动取上下界。
+// 不模拟过载取消、事件与世界变化；过载只以风险值提示。
+export const QUALITY_NOISE_RANGE = Object.freeze([0.94, 1.06]);
+
+function forecastPass(state, profile, noise) {
+  const performer = { fatigue: state.performer.fatigue, stress: state.performer.stress, motivation: state.performer.motivation, physicalCondition: state.performer.physicalCondition, abilities: state.performer.abilities };
+  const segments = state.audienceSegments.map((segment) => ({ ...segment, dailyReachEstimates: segment.dailyReachEstimates.slice(-28) }));
+  const worldWeek = state.worldWeeks?.find((item) => item.weekIndex === state.weekIndex) || null;
+  const range = weekDateRange(state.weekIndex);
+  const completedPairs = new Set();
+  let preparationBank = state.progression.preparationBank || 0;
+  let hasDebuted = state.progression.hasDebuted;
+  let propagationBoost = availablePropagationBoost(state);
+  let peakFatigue = performer.fatigue;
+  const slots = [];
+  for (let slotIndex = 0; slotIndex < 14; slotIndex += 1) {
+    const planned = state.plan[slotIndex];
+    const actionId = planned.actionId || "REST";
+    const action = ACTIONS[actionId];
+    const fatigueBefore = performer.fatigue;
+    if (planned.pairId && completedPairs.has(planned.pairId)) {
+      if (slotIndex % 2 === 1) applyDailyRecovery(profile, performer);
+      slots.push({ slotIndex, actionId, paired: true, fatigueBefore, fatigueAfter: performer.fatigue, overloadRisk: 0 });
+      continue;
+    }
+    if (planned.pairId) completedPairs.add(planned.pairId);
+    const risk = overloadRisk(profile, performer.fatigue, actionId, planned);
+    applyLoad(performer, slotLoad(profile, actionId, performer));
+    peakFatigue = Math.max(peakFatigue, performer.fatigue);
+    if (actionId === "PREPARE_CONTENT") preparationBank = Math.min(2, preparationBank + 1);
+    const slot = { slotIndex, actionId, fatigueBefore, overloadRisk: Number(risk.toFixed(2)) };
+    if (["live", "video"].includes(action.kind)) {
+      const date = isoAddDays(range.start, Math.floor(slotIndex / 2));
+      const inputs = contentQualityInputs(state, actionId, preparationBank, performer);
+      if (preparationBank > 0) preparationBank -= 1;
+      const quality = calculateQuality({ ...inputs, noise });
+      const collabReservation = actionId === "LIVE_COLLAB" && planned.targetType === "COLLAB_RESERVATION" ? state.collaborationReservations.find((item) => item.id === planned.targetId) : null;
+      const collabExposure = collabReservation ? collaborationExposureCoefficient(state, collabReservation.npcId, date) : 1;
+      const launch = !hasDebuted && action.kind === "live";
+      let unique = 0;
+      let subscribers = 0;
+      for (const segment of segments) {
+        const outcome = segmentOutcome({ state, segment, actionId, quality: quality.quality, worldWeek, hasDebuted, collabExposure, propagationBoost });
+        applySegmentOutcome(segment, outcome, quality.quality, date);
+        segment.dailyReachEstimates = segment.dailyReachEstimates.slice(-28);
+        unique += outcome.unique;
+        subscribers += outcome.gainedSubs;
+      }
+      propagationBoost = 0;
+      hasDebuted ||= action.kind === "live";
+      Object.assign(slot, {
+        quality: Number(quality.quality.toFixed(1)),
+        unique,
+        subscribers,
+        factors: { related: Math.round(inputs.related), preparation: inputs.preparation, match: inputs.match, stateMultiplier: Number(quality.stateMultiplier.toFixed(2)), launch },
+      });
+    }
+    if (slotIndex % 2 === 1) applyDailyRecovery(profile, performer);
+    slot.fatigueAfter = performer.fatigue;
+    slots.push(slot);
+  }
+  return { slots, performer, peakFatigue };
+}
+
+export function forecastPlan(state) {
+  const profile = balanceOf(state);
+  const [low, high] = QUALITY_NOISE_RANGE.map((noise) => forecastPass(state, profile, noise));
+  const slots = low.slots.map((slot, index) => {
+    const upper = high.slots[index];
+    if (slot.quality == null) return slot;
+    return {
+      ...slot,
+      quality: [slot.quality, upper.quality],
+      unique: [Math.min(slot.unique, upper.unique), Math.max(slot.unique, upper.unique)],
+      subscribers: [Math.min(slot.subscribers, upper.subscribers), Math.max(slot.subscribers, upper.subscribers)],
+    };
+  });
+  const contentSlots = slots.filter((slot) => slot.quality);
+  const sum = (pick) => contentSlots.reduce((total, slot) => [total[0] + pick(slot)[0], total[1] + pick(slot)[1]], [0, 0]);
+  const expectedCancellations = slots.reduce((total, slot) => total + (slot.overloadRisk || 0), 0);
+  return {
+    slots,
+    subscriberRange: sum((slot) => slot.subscribers),
+    uniqueRange: sum((slot) => slot.unique),
+    projectedFatigue: low.performer.fatigue,
+    projectedStress: low.performer.stress,
+    peakFatigue: low.peakFatigue,
+    overloadSlots: slots.filter((slot) => slot.overloadRisk > 0).length,
+    expectedCancellations: Number(expectedCancellations.toFixed(2)),
+    overloadThreshold: profile.overload?.fatigueThreshold ?? null,
+  };
+}
+
 export function previewWeek(state) {
+  const forecast = forecastPlan(state);
   const activities = state.plan.map((slot) => slot.actionId || "REST");
   const uniqueActions = activities.filter((id, index) => !state.plan[index].pairId || state.plan.findIndex((slot) => slot.pairId === state.plan[index].pairId) === index);
-  const fatigueDelta = uniqueActions.reduce((sum, id) => sum + (ACTIONS[id]?.fatigue || 0), 0) - 28;
-  const stressDelta = uniqueActions.reduce((sum, id) => sum + (ACTIONS[id]?.stress || 0), 0) - 14;
   const liveCount = uniqueActions.filter((id) => ACTIONS[id]?.kind === "live").length;
   const workSlots = activities.filter((id) => !["REST", "LIFE"].includes(id)).length;
-  const projectedFatigue = clamp(state.performer.fatigue + fatigueDelta, 0, 100);
-  const projectedStress = clamp(state.performer.stress + stressDelta, 0, 100);
-  const baseGrowth = liveCount * (state.progression.hasDebuted ? 18 : ROUTES[state.routeId].launchImpressions > 3000 ? 110 : 35);
+  const { projectedFatigue, projectedStress, peakFatigue } = forecast;
   return {
     liveCount,
     workSlots,
     projectedFatigue,
     projectedStress,
-    subscriberRange: [Math.max(0, Math.floor(baseGrowth * 0.65)), Math.ceil(baseGrowth * 1.35)],
-    risk: projectedFatigue > 75 || projectedStress > 70 ? "high" : projectedFatigue > 58 || projectedStress > 55 ? "medium" : "low",
+    peakFatigue,
+    subscriberRange: forecast.subscriberRange,
+    overloadSlots: forecast.overloadSlots,
+    expectedCancellations: forecast.expectedCancellations,
+    slots: forecast.slots,
+    risk: forecast.overloadSlots > 0 || peakFatigue > 75 || projectedStress > 70 ? "high" : peakFatigue > 58 || projectedStress > 55 ? "medium" : "low",
   };
 }
 
@@ -570,6 +769,7 @@ export async function settleWeek(sourceState) {
   const currentWorldWeek = ensureWorldWeek(state);
   state.phase = "RUNNING";
   const route = ROUTES[state.routeId];
+  const profile = balanceOf(state);
   const range = weekDateRange(state.weekIndex);
   const completedPairs = new Set();
   const repeatCounts = {};
@@ -593,6 +793,7 @@ export async function settleWeek(sourceState) {
   let weeklyMembershipPromisesFulfilled = 0;
   const weekOpeningCash = BigInt(state.cash.free);
   const activityResults = [];
+  const cancelledSlots = [];
   const contents = [];
   let preparationBank = state.progression.preparationBank || 0;
 
@@ -601,10 +802,7 @@ export async function settleWeek(sourceState) {
     const actionId = planned.actionId || "REST";
     const action = ACTIONS[actionId];
     if (planned.pairId && completedPairs.has(planned.pairId)) {
-      if (slotIndex % 2 === 1) {
-        state.performer.fatigue = clamp(state.performer.fatigue - 4, 0, 100);
-        state.performer.stress = clamp(state.performer.stress - 2, 0, 100);
-      }
+      if (slotIndex % 2 === 1) applyDailyRecovery(profile, state.performer);
       continue;
     }
     if (planned.pairId) completedPairs.add(planned.pairId);
@@ -621,9 +819,20 @@ export async function settleWeek(sourceState) {
       processAuditionDeadlines(state, date);
       processPropagationCommissions(state, date);
     }
-    state.performer.fatigue = clamp(state.performer.fatigue + action.fatigue, 0, 100);
-    state.performer.stress = clamp(state.performer.stress + action.stress, 0, 100);
-    state.performer.motivation = clamp(state.performer.motivation + (action.motivation || 0), 0, 100);
+    const risk = overloadRisk(profile, state.performer.fatigue, actionId, planned);
+    if (risk > 0 && await deterministicRandom(state.seed, state.weekIndex, "overload", `${state.channel.id}_${slotIndex}`, 0) < risk) {
+      // 身体不适：本格内容取消并按休息处理，不产出内容与经验。
+      repeatCounts[actionId] = occurrence;
+      applyLoad(state.performer, slotLoad(profile, "REST", state.performer));
+      state.performer.physicalCondition = clamp(state.performer.physicalCondition - profile.overload.physicalConditionPenalty, 0, 100);
+      state.performer.stress = clamp(state.performer.stress + profile.overload.stressPenalty, 0, 100);
+      const fatigueAtCancel = state.performer.fatigue;
+      cancelledSlots.push({ slotIndex, actionId, date, risk: Number(risk.toFixed(2)) });
+      activityResults.push({ actionId, date, cancelled: true, reason: "疲劳过高，身体不适临时取消", fatigue: fatigueAtCancel });
+      if (slotIndex % 2 === 1) applyDailyRecovery(profile, state.performer);
+      continue;
+    }
+    applyLoad(state.performer, slotLoad(profile, actionId, state.performer));
 
     if (actionId === "PREPARE_CONTENT") preparationBank = Math.min(2, preparationBank + 1);
     if (actionId === "PART_TIME") partTimeIncome += action.income;
@@ -642,18 +851,10 @@ export async function settleWeek(sourceState) {
     if (["live", "video"].includes(action.kind)) {
       const draw = await deterministicRandom(state.seed, state.weekIndex, "content_quality", `${state.channel.id}_${slotIndex}`, occurrence);
       const noise = 0.94 + draw * 0.12;
-      const preparation = 40 + Math.min(40, preparationBank * 20);
+      const qualityInputs = contentQualityInputs(state, actionId, preparationBank);
+      const { preparation } = qualityInputs;
       if (preparationBank > 0) preparationBank -= 1;
-      const qualityResult = calculateQuality({
-        related: relatedAbility(state.performer.abilities, actionId),
-        preparation,
-        match: activityMatchValue(state, actionId),
-        production: 50 + (["LIVE_MUSIC", "MAKE_SHORT", "EDIT_VIDEO"].includes(actionId) ? Math.min(20, Number(state.character.visualProductionBonus || 0)) : 0),
-        fatigue: state.performer.fatigue,
-        stress: state.performer.stress,
-        physicalCondition: state.performer.physicalCondition,
-        noise,
-      });
+      const qualityResult = calculateQuality({ ...qualityInputs, noise });
       const collabReservation = actionId === "LIVE_COLLAB" && planned.targetType === "COLLAB_RESERVATION" ? state.collaborationReservations.find((item) => item.id === planned.targetId) : null;
       const collabExposure = collabReservation ? collaborationExposureCoefficient(state, collabReservation.npcId, date) : 1;
       const propagationBoost = availablePropagationBoost(state);
@@ -662,34 +863,12 @@ export async function settleWeek(sourceState) {
       let contentWatchMinutes = 0;
       const segmentSnapshots = [];
       for (const segment of state.audienceSegments) {
-        const match = matchScore(state, actionId, segment);
-        const avgPopulation = BALANCE.audience.totalMarket / 24;
-        const pool = BALANCE.audience.baseImpressionPoolPerSegmentSlot * segment.marketPopulation / avgPopulation;
-        const playerWeight = (1 + Math.log(1 + compactActiveEstimate([segment])) / 3) * (0.5 + qualityResult.quality / 100) * match;
-        const marketSupplyFactor = 0.75 + Number(currentWorldWeek.supplyResources || 50) / 200;
-        let impressions = Math.floor(pool * playerWeight / (playerWeight + BALANCE.audience.backgroundRecommendationWeight * marketSupplyFactor) * collabExposure);
-        impressions += Math.floor(propagationBoost * segment.marketPopulation / BALANCE.audience.totalMarket);
-        if (!state.progression.hasDebuted && action.kind === "live") impressions += Math.floor(route.launchImpressions * segment.marketPopulation / BALANCE.audience.totalMarket);
-        const packaging = clamp(45 + state.performer.abilities.planning * 0.35, 0, 100);
-        const ctr = clamp(0.025 + 0.05 * packaging / 100, 0.01, 0.1);
-        const clicks = Math.floor(impressions * ctr);
-        const newViewers = Math.floor(clicks * (1 - segment.knownViewers / segment.marketPopulation));
-        const recentActiveRatio = segment.knownViewers ? Math.min(1, compactActiveEstimate([segment]) / segment.knownViewers) : 0;
-        const returning = Math.floor(segment.knownViewers * 0.12 * match * 0.9 * (0.2 + 0.8 * recentActiveRatio) * (0.5 + segment.loyalty / 100));
-        const unique = Math.min(segment.marketPopulation, Math.round(unionEstimate(Math.max(segment.knownViewers, 1), Math.min(segment.knownViewers, returning), Math.min(segment.knownViewers, Math.floor(clicks * 0.2)))) + newViewers);
-        const streamMinutes = action.kind === "live" ? 120 : 12;
-        const watchRatio = clamp(0.12 + 0.5 * qualityResult.quality / 100 + 0.15 * match + 0.08 * segment.loyalty / 100, 0.05, 0.85);
-        const watchMinutes = Math.round(unique * streamMinutes * watchRatio);
-        const convertible = newViewers + returning * (1 - segment.subscribers / Math.max(segment.knownViewers, 1));
-        const pSub = clamp(0.01 + 0.06 * qualityResult.quality / 100 + 0.04 * match, 0.005, 0.15) * (action.kind === "video" ? 0.6 : 1);
-        const gainedSubs = Math.max(0, Math.min(Math.round(convertible * pSub), unique - Math.min(segment.subscribers, unique)));
+        const outcome = segmentOutcome({ state, segment, actionId, quality: qualityResult.quality, worldWeek: currentWorldWeek, hasDebuted: state.progression.hasDebuted, collabExposure, propagationBoost });
+        const { newViewers, returning, unique, watchMinutes, gainedSubs } = outcome;
         const budget = state.audienceBudgets.find((item) => item.lineageId === segment.id && item.performerId === state.performer.id);
         allocateNewViewerBudget(state, segment, budget, newViewers, date);
         segmentSnapshots.push({ segmentId: segment.id, unique, newViewers, returning, loyalty: segment.loyalty });
-        segment.knownViewers = Math.min(segment.marketPopulation, segment.knownViewers + newViewers);
-        segment.subscribers = Math.min(segment.knownViewers, segment.subscribers + gainedSubs);
-        segment.loyalty = clamp(segment.loyalty + clamp((qualityResult.quality - 55) / 10, -3, 3), 0, 100);
-        segment.dailyReachEstimates.push({ date, unique });
+        applySegmentOutcome(segment, outcome, qualityResult.quality, date);
         segment.dailyReachEstimates = segment.dailyReachEstimates.slice(-365);
         contentUnique += unique;
         contentSubscribers += gainedSubs;
@@ -760,10 +939,7 @@ export async function settleWeek(sourceState) {
       activityResults.push({ actionId, date, quality: content.quality, unique: contentUnique, subscribers: contentSubscribers });
     }
 
-    if (slotIndex % 2 === 1) {
-      state.performer.fatigue = clamp(state.performer.fatigue - 4, 0, 100);
-      state.performer.stress = clamp(state.performer.stress - 2, 0, 100);
-    }
+    if (slotIndex % 2 === 1) applyDailyRecovery(profile, state.performer);
   }
 
   for (const skill of SKILLS) {
@@ -775,10 +951,17 @@ export async function settleWeek(sourceState) {
       state.performer.experience[skill] -= applied * 100;
     }
   }
-  const expenses = BigInt(BALANCE.costs.weeklyLivingJpy) + route.weeklyToolCost;
+  const weekCosts = weeklyExpenses(state, profile);
+  const expenses = weekCosts.total;
   const closingCash = BigInt(state.cash.free) + partTimeIncome - expenses;
+  const cashShortfall = closingCash < 0n ? -closingCash : 0n;
   state.cash.free = String(closingCash < 0n ? 0n : closingCash);
-  state.history.journalEntries.push({ id: `journal_w${state.weekIndex}_costs`, date: range.end, sourceId: `weekly_costs_${state.weekIndex}`, lines: [{ account: "LIVING_COST", debit: BALANCE.costs.weeklyLivingJpy, credit: "0" }, ...(route.weeklyToolCost ? [{ account: "OPERATING_COST", debit: String(route.weeklyToolCost), credit: "0" }] : []), { account: "CASH_FREE", debit: "0", credit: String(expenses) }] });
+  if (cashShortfall > 0n && profile.cashShortfall) {
+    // 缺口由压缩生活吸收：不形成负债，但直接反映在状态上，并在周报中提示。
+    state.performer.stress = clamp(state.performer.stress + profile.cashShortfall.stress, 0, 100);
+    state.performer.motivation = clamp(state.performer.motivation + profile.cashShortfall.motivation, 0, 100);
+  }
+  state.history.journalEntries.push({ id: `journal_w${state.weekIndex}_costs`, date: range.end, sourceId: `weekly_costs_${state.weekIndex}`, lines: [{ account: "LIVING_COST", debit: String(weekCosts.living), credit: "0" }, ...(weekCosts.tools ? [{ account: "OPERATING_COST", debit: String(weekCosts.tools), credit: "0" }] : []), ...(weekCosts.operations ? [{ account: "CHANNEL_OPERATING_COST", debit: String(weekCosts.operations), credit: "0" }] : []), { account: "CASH_FREE", debit: "0", credit: String(expenses) }] });
   if (partTimeIncome > 0n) state.history.journalEntries.push({ id: `journal_w${state.weekIndex}_part_time`, date: range.end, sourceId: `part_time_${state.weekIndex}`, lines: [{ account: "CASH_FREE", debit: String(partTimeIncome), credit: "0" }, { account: "OTHER_INCOME", debit: "0", credit: String(partTimeIncome) }] });
   state.channel.subscribers += subscriberDelta;
   state.history.contents.push(...contents);
@@ -821,6 +1004,9 @@ export async function settleWeek(sourceState) {
       sponsorCreatorEarnedJpy: String(weeklySponsorCreator),
     },
     activities: activityResults,
+    ...(cancelledSlots.length ? { cancelledSlots } : {}),
+    ...(profile.costs.channelOperations ? { expenses: { livingJpy: String(weekCosts.living), toolsJpy: String(weekCosts.tools), channelOperationsJpy: String(weekCosts.operations) } } : {}),
+    ...(cashShortfall > 0n && profile.cashShortfall ? { cashShortfallJpy: String(cashShortfall) } : {}),
     contents,
     state: { fatigue: state.performer.fatigue, stress: state.performer.stress, motivation: state.performer.motivation, physicalCondition: state.performer.physicalCondition },
     xp: weeklyXp,

@@ -1,3 +1,4 @@
+import { openingCash } from "./helpers/opening-cash.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { BALANCE } from "../rules/balance_standard_0_1.js";
@@ -66,18 +67,18 @@ test("new outfit requires three payment nodes, scheduled resources, work, wait, 
   let state = game("outfit-lifecycle");
   state = unwrap(createLongProject(state, { templateId: "NEW_OUTFIT_STANDARD", date: "2026-09-14" }));
   const projectId = state.projects[0].id;
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.projects[0].status, "DRAFT");
   state = unwrap(submitLongProject(state, { projectId, date: "2026-09-14" }));
   assert.equal(state.projects[0].status, "APPROVED");
   state = unwrap(startLongProject(state, { projectId, date: "2026-09-14" }));
-  assert.equal(state.cash.free, "555000");
+  assert.equal(state.cash.free, openingCash(-45000));
   assert.equal(state.projects[0].spentCostJpy, "45000");
   assert.equal(state.projects[0].earliestPublishDate, "2026-10-12");
   assert.equal(state.resourceReservations.length, 1);
   assert.equal(state.resourceReservations[0].date, "2026-09-21");
   state = unwrap(enterLongProjectProduction(state, { projectId, date: "2026-09-14" }));
-  assert.equal(state.cash.free, "495000");
+  assert.equal(state.cash.free, openingCash(-105000));
   assert.equal(state.projects[0].spentCostJpy, "105000");
   assert.equal(processLongProjectDate(state, { projectId, date: "2026-10-12" }).code, "REQUIREMENT_UNMET");
   for (let index = 0; index < 4; index += 1) applyLongProjectWork(state, projectId, "2026-09-20");
@@ -86,7 +87,7 @@ test("new outfit requires three payment nodes, scheduled resources, work, wait, 
   assert.equal(state.projects[0].status, "QUALITY_CHECK");
   assert.equal(state.resourceReservations[0].status, "FULFILLED");
   state = unwrap(passLongProjectQuality(state, { projectId, date: "2026-10-12" }));
-  assert.equal(state.cash.free, "450000");
+  assert.equal(state.cash.free, openingCash(-150000));
   assert.deepEqual(state.projects[0].paymentPlan.paidNodes, ["startup", "production", "acceptance"]);
   state = unwrap(publishLongProject(state, { projectId, date: "2026-10-12" }));
   assert.equal(state.projects[0].status, "PUBLISHED");
@@ -124,7 +125,7 @@ test("cancellation and pause preserve confirmed cost and the resumable stage", (
   assert.equal(state.projects[0].cancellationTreatment.confirmedCostJpy, "105000");
   assert.equal(state.projects[0].cancellationTreatment.refundedJpy, "0");
   assert.equal(state.resourceReservations[0].status, "CANCELLED");
-  assert.equal(state.cash.free, "495000");
+  assert.equal(state.cash.free, openingCash(-105000));
 });
 
 test("company route uses review, fair manager allocation, contract snapshot, and company-owned asset permission", async () => {

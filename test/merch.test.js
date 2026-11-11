@@ -1,3 +1,4 @@
+import { openingCash } from "./helpers/opening-cash.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createGame, migrateGame, settleWeek, updatePlan } from "../src/domain/engine.js";
@@ -148,7 +149,7 @@ test("G-03 and A-21/A-25 self-run 300-unit presale preserves restricted cash unt
   assert.equal(state.projects[0].status, "SETTLED");
   assert.equal(state.projects[0].projectProfitJpy, "300000");
   assert.equal(state.finance.projectProfit, "300000");
-  assert.equal(state.cash.free, "900000");
+  assert.equal(state.cash.free, openingCash(300000));
   assert.equal(state.cash.restricted, "0");
   for (const entry of state.history.journalEntries) {
     const debit = entry.lines.reduce((sum, line) => sum + BigInt(line.debit), 0n);
@@ -169,7 +170,7 @@ test("G-04 company-led 300-unit project records only a 90,000 royalty receivable
   state = unwrap(recordMerchPresale(state, { projectId, lineageId, requestedOrders: 300, date: "2026-09-28" }));
   assert.equal(state.projects[0].grossOrdersJpy, "750000");
   assert.equal(state.projects[0].companyLedger.restrictedCashJpy, "750000");
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.cash.restricted, "0");
   assert.equal(state.liabilities.deferredCustomerFunds, "0");
   assert.equal(state.finance.merchOrderGmv, "0");
@@ -184,7 +185,7 @@ test("G-04 company-led 300-unit project records only a 90,000 royalty receivable
   const settled = state.projects[0];
   assert.equal(settled.projectProfitJpy, "300000");
   assert.equal(settled.royaltyJpy, "90000");
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.cash.receivable, "90000");
   assert.equal(state.finance.merchOrderGmv, "0");
   assert.equal(state.finance.merchFulfilledRevenue, "0");
@@ -199,7 +200,7 @@ test("G-04 company-led 300-unit project records only a 90,000 royalty receivable
     assert.equal(debit, credit, entry.id);
   }
   assert.equal(processDueReceivables(state, "2027-01-10"), 90000n);
-  assert.equal(state.cash.free, "690000");
+  assert.equal(state.cash.free, openingCash(90000));
   assert.equal(state.cash.receivable, "0");
   assert.equal(state.finance.royaltyCreatorReceived, "90000");
 });
@@ -215,7 +216,7 @@ test("a loss-making company merchandise project creates no player debt or negati
   state = unwrap(settleMerchProject(state, { projectId, date: "2026-11-29" }));
   assert.equal(state.projects[0].projectProfitJpy, "-50000");
   assert.equal(state.projects[0].royaltyJpy, "0");
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.cash.receivable, "0");
   assert.equal(state.cash.payable, "0");
   assert.equal(state.history.royaltyTransactions.length, 0);
@@ -242,7 +243,7 @@ test("post-delivery refunds use cumulative deltas and restore only actually rese
   assert.equal(duplicate.code, "DUPLICATE_TRANSACTION");
   state = unwrap(settleMerchProject(state, { projectId, date: "2026-11-29" }));
   assert.equal(state.projects[0].projectProfitJpy, "269700");
-  assert.equal(state.cash.free, "862500");
+  assert.equal(state.cash.free, openingCash(262500));
   for (const entry of state.history.journalEntries) {
     const debit = entry.lines.reduce((sum, line) => sum + BigInt(line.debit), 0n);
     const credit = entry.lines.reduce((sum, line) => sum + BigInt(line.credit), 0n);
@@ -253,14 +254,14 @@ test("post-delivery refunds use cumulative deltas and restore only actually rese
 test("company post-delivery refund stays in the company subledger and reduces only positive-profit royalty", () => {
   let { state, projectId } = deliverPreparedSale(prepareCompanySale("company-delivered-refund", 4000));
   state = unwrap(refundDeliveredMerch(state, { projectId, transactionId: "company_merch_return_1", cumulativeRefundOrders: 10, cumulativeRestockableOrders: 10, date: "2026-11-20" }));
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.cash.restricted, "0");
   assert.equal(state.finance.merchFulfilledRevenue, "0");
   assert.equal(state.projects[0].companyLedger.restrictedCashJpy, "725000");
   state = unwrap(settleMerchProject(state, { projectId, date: "2026-11-29" }));
   assert.equal(state.projects[0].projectProfitJpy, "284000");
   assert.equal(state.projects[0].royaltyJpy, "85200");
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.cash.receivable, "85200");
   assert.equal(state.cash.payable, "0");
 });
@@ -288,7 +289,7 @@ test("digital goods skip sampling, production, shipping, and inventory while ret
   state = unwrap(createMerchProject(state, { date: "2026-09-14", templateId: "DIGITAL_VOICE_PACK_STANDARD" }));
   const projectId = state.projects[0].id;
   state = unwrap(confirmMerchProject(state, { projectId, date: "2026-09-14" }));
-  assert.equal(state.cash.free, "560000");
+  assert.equal(state.cash.free, openingCash(-40000));
   state = unwrap(recordMerchDesignWork(state, { projectId, date: "2026-09-14" }));
   state = unwrap(recordMerchDesignWork(state, { projectId, date: "2026-09-14" }));
   assert.equal(state.projects[0].status, "READY_TO_SELL");
@@ -309,7 +310,7 @@ test("digital goods skip sampling, production, shipping, and inventory while ret
   assert.equal(invalidRestock.code, "INVALID_FINANCIAL_BASIS");
   state = unwrap(settleMerchProject(state, { projectId, date: "2026-10-11" }));
   assert.equal(state.projects[0].projectProfitJpy, "70400");
-  assert.equal(state.cash.free, "670400");
+  assert.equal(state.cash.free, openingCash(70400));
 });
 
 test("ready stock occupies funds before sale, caps orders by inventory, and preserves unsold units", () => {
@@ -324,7 +325,7 @@ test("ready stock occupies funds before sale, caps orders by inventory, and pres
   assert.equal(state.projects[0].status, "PRODUCING");
   assert.equal(state.projects[0].productionQuantity, 50);
   assert.equal(state.projects[0].costs.productionJpy, "15000");
-  assert.equal(state.cash.free, "525000");
+  assert.equal(state.cash.free, openingCash(-75000));
   state = unwrap(processMerchProjectDate(state, { projectId, date: "2026-10-05" }));
   assert.equal(state.projects[0].status, "READY_TO_SELL");
   assert.equal(state.projects[0].inventoryQuantity, 50);
@@ -352,7 +353,7 @@ test("ready stock occupies funds before sale, caps orders by inventory, and pres
   assert.equal(state.projects[0].costs.cogsJpy, "9000");
   state = unwrap(settleMerchProject(state, { projectId, date: "2026-11-08" }));
   assert.equal(state.projects[0].projectProfitJpy, "-44160");
-  assert.equal(state.cash.free, "549840");
+  assert.equal(state.cash.free, openingCash(-50160));
 });
 
 test("company-led digital goods keep gross sales outside personal cash and create royalty only at settlement", () => {
@@ -370,7 +371,7 @@ test("company-led digital goods keep gross sales outside personal cash and creat
   state = unwrap(settleMerchProject(state, { projectId, date: "2026-10-11" }));
   assert.equal(state.projects[0].projectProfitJpy, "70400");
   assert.equal(state.projects[0].royaltyJpy, "21120");
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.cash.restricted, "0");
   assert.equal(state.cash.receivable, "21120");
   assert.equal(state.finance.merchOrderGmv, "0");

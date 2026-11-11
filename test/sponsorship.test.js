@@ -1,3 +1,4 @@
+import { openingCash } from "./helpers/opening-cash.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createGame, migrateGame, settleWeek, updatePlan } from "../src/domain/engine.js";
@@ -58,7 +59,7 @@ test("personal sponsorship keeps 30% upfront restricted, then recognizes deliver
   const accepted = acceptSponsorship(state, offer.id, "2026-09-14");
   assert.equal(accepted.ok, true);
   state = accepted.state;
-  assert.equal(state.cash.free, "600000");
+  assert.equal(state.cash.free, openingCash(0));
   assert.equal(state.cash.restricted, "5700");
   assert.equal(state.liabilities.deferredCustomerFunds, "5700");
   assert.equal(state.finance.sponsorCreatorEarned, "0");

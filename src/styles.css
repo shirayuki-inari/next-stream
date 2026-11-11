@@ -752,3 +752,13 @@ legend { width: 100%; margin-bottom: 8px; padding: 0; font-size: var(--fs-sm); f
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* 按格预测：排期格内的质量与订阅区间、过载风险，以及周报提示。 */
+.slot-forecast { display: flex; flex-wrap: wrap; gap: 4px 6px; color: var(--teal); font-family: var(--utility); font-size: var(--fs-xs); line-height: 1.4; }
+.slot-risk { color: var(--danger-ink); font-weight: 700; }
+.report-notices { margin: 12px 0 0; padding: 10px 12px 10px 28px; border-left: 3px solid var(--warning); background: rgba(183,121,31,.08); font-size: var(--fs-sm); line-height: 1.6; }
+.report-notices li + li { margin-top: 4px; }
+@media (max-width: 760px) {
+  .slot-forecast { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .slot-risk { margin-left: 4px; }
+}
